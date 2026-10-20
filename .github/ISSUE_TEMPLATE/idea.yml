@@ -1,0 +1,26 @@
+name: Idea or analysis
+description: Something the tool should do, or a question the data could answer.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Published analyses show only aggregates, and none with fewer than 10 plants. See
+        [Personal data](https://github.com/duramson/eeg-bewegungsdaten#personal-data).
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea
+      description: What should the tool do, or which question should an analysis answer?
+    validations:
+      required: true
+  - type: textarea
+    id: use
+    attributes:
+      label: Use
+      description: Who needs it, and for what?
+  - type: textarea
+    id: data
+    attributes:
+      label: Data
+      description: The years, TSOs, columns or MaStR fields it needs, if you know them.

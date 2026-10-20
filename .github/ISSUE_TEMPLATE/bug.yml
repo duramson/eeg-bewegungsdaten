@@ -1,0 +1,45 @@
+name: Bug in the tool
+description: A command fails, or reads, matches or exports a file wrongly.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Wrong or missing values in the published files themselves are for the TSOs. Write to
+        them through the [contact form of netztransparenz.de](https://www.netztransparenz.de/de-de/Impressum/Kontakt).
+
+        Do not paste real rows or Anlagenschluessel: some keys contain names of people or
+        streets. If a row shows the problem, change its key and amounts first.
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `eeg-bewegungsdaten --version`.
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command
+      description: The command you ran.
+      placeholder: eeg-bewegungsdaten ingest --year 2025 --uenb amprion
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: What happened
+      description: The error message or the output, as text.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+  - type: input
+    id: system
+    attributes:
+      label: System
+      description: Operating system and Python version.
+      placeholder: macOS 26, Python 3.13

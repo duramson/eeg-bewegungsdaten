@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Errors in the published files
+    url: https://www.netztransparenz.de/de-de/Impressum/Kontakt
+    about: Wrong or missing values in the EEG-Bewegungsdaten themselves. The TSOs publish them.
+  - name: Errors in the Marktstammdatenregister
+    url: https://www.marktstammdatenregister.de/MaStR/Startseite/Kontakt
+    about: Wrong plant data in the MaStR. The Bundesnetzagentur runs it.
+  - name: Problems with open-MaStR
+    url: https://github.com/OpenEnergyPlatform/open-MaStR/issues
+    about: Downloading the MaStR or building its database fails.
