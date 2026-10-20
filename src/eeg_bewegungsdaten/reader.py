@@ -17,7 +17,7 @@ from typing import IO
 
 import polars as pl
 
-from eeg_bewegungsdaten.schema import TEXT_COLUMNS, TEXT_SCHEMA, map_header
+from eeg_bewegungsdaten.schema import TEXT_COLUMNS, TEXT_SCHEMA, FormatError, map_header
 
 # Keeps peak memory near 1 GB for the largest file so far (TenneT 2025, 3.8 million lines).
 BLOCK_SIZE = 8 << 20
@@ -105,11 +105,16 @@ def skipped_members(path: Path) -> list[str]:
 
 
 def _data_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
-    """The CSV files, or the TXT files if there is no CSV file."""
+    """The CSV files, or the TXT files if there is no CSV file; reject duplicate full names."""
     files = [info for info in archive.infolist() if not info.is_dir()]
     for suffix in (".csv", ".txt"):
         found = [info for info in files if info.filename.lower().endswith(suffix)]
         if found:
+            seen: set[str] = set()
+            for info in found:
+                if info.filename in seen:
+                    raise FormatError(f"{archive.filename}: duplicate data member {info.filename}")
+                seen.add(info.filename)
             return found
     return []
 
