@@ -307,6 +307,64 @@ def test_an_upload_without_date_counts_as_published_when_downloaded(data_dir: Pa
     assert [[f.path for f in upload] for upload in latest_uploads(data_dir)] == [[undated.path]]
 
 
+NEWER_ID = "aaaaaaaa-1111-2222-3333-444444444444"
+
+
+def outputs_of(data_dir: Path, year: int, uenb: str) -> dict[Path, bytes]:
+    outputs = output_paths(data_dir, year, uenb)
+    return {
+        p: p.read_bytes() for p in (outputs.text, outputs.clean, outputs.quarantine, outputs.report)
+    }
+
+
+@pytest.mark.parametrize("damage", ["missing", "truncated"])
+def test_a_damaged_newest_upload_is_not_replaced_by_an_older_one(
+    data_dir: Path, damage: str
+) -> None:
+    archive(data_dir, {"data.csv": csv(HEADER, row(energy="10"))})
+    new_members = {"data.csv": csv(HEADER, row(energy="20"))}
+    new = archive(data_dir, new_members, file_id=NEWER_ID)
+    assert cli.main(["--data-dir", str(data_dir), "ingest"]) == 0
+    before = outputs_of(data_dir, 2025, "amprion")
+    clean_path = output_paths(data_dir, 2025, "amprion").clean
+    energy = pl.read_parquet(clean_path)["strommenge"].to_list()
+    if damage == "missing":
+        new.path.unlink()
+    else:
+        new.path.write_bytes(new.path.read_bytes()[:100])
+
+    assert [[f.path for f in upload] for upload in latest_uploads(data_dir)] == [[new.path]]
+    with pytest.raises(FormatError, match="missing or truncated"):
+        ingest(latest_uploads(data_dir)[0], data_dir)
+    assert cli.main(["--data-dir", str(data_dir), "ingest"]) == 1
+    assert outputs_of(data_dir, 2025, "amprion") == before
+
+    # Downloading the file again repairs the archive.
+    archive(data_dir, new_members, file_id=NEWER_ID)
+    assert cli.main(["--data-dir", str(data_dir), "ingest"]) == 0
+    assert pl.read_parquet(clean_path)["strommenge"].to_list() == energy
+
+
+def test_a_newer_multipart_upload_without_any_part_is_not_replaced(data_dir: Path) -> None:
+    for part in (1, 2, 3):
+        old_part = tennet_part(part, row(uenb="tennet", energy="10"))
+        archive_part(data_dir, part, old_part, folder="alt/2024", published=OLD)
+    new = [
+        archive_part(data_dir, part, tennet_part(part, row(uenb="tennet")), published=NEW)
+        for part in (1, 2)
+    ]
+    ingest(latest_uploads(data_dir)[0], data_dir)
+    before = outputs_of(data_dir, 2024, "tennet")
+    for f in new:
+        f.path.unlink()
+
+    assert [[f.path for f in upload] for upload in latest_uploads(data_dir)] == [
+        [f.path for f in new]
+    ]
+    assert cli.main(["--data-dir", str(data_dir), "ingest"]) == 1
+    assert outputs_of(data_dir, 2024, "tennet") == before
+
+
 def test_same_file_name_in_two_parts_is_an_error(data_dir: Path) -> None:
     for part in (1, 2):
         archive_part(data_dir, part, {"Bewegungsdaten.csv": csv(HEADER, row(uenb="tennet"))})

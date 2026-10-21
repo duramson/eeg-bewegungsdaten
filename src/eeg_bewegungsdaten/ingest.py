@@ -51,10 +51,13 @@ def latest_uploads(data_dir: Path) -> list[list[ArchivedFile]]:
     several ZIPs (TenneT 2024), sorted by part. The newest upload is the one published last;
     without a publication date, the download date stands in for it. Older uploads that were
     archived later (TransnetBW 2020 of July 2021) therefore do not replace newer ones.
+
+    Missing and truncated files count too, so that `ingest` refuses the newest upload instead of
+    quietly falling back to an older one.
     """
     latest: dict[tuple[int, str], tuple[tuple[str, str], Path]] = {}
     folders: dict[Path, list[ArchivedFile]] = {}
-    for archived in archived_files(data_dir):
+    for archived in archived_files(data_dir, include_incomplete=True):
         meta = archived.meta
         if meta["kind"] != "bewegungsdaten":
             continue
@@ -73,6 +76,11 @@ def _check_parts(files: Sequence[ArchivedFile]) -> None:
     """Reject partial or mixed uploads before replacing any existing output."""
     if len({f.path.parent for f in files}) != 1:
         raise FormatError("Files from different uploads cannot be ingested together")
+    for f in files:
+        if not f.path.is_file() or f.path.stat().st_size != f.meta.get("size"):
+            raise FormatError(
+                f"{f.path}: archived file is missing or truncated; run 'download' again"
+            )
     parts = [f.meta.get("part") for f in files]
     if all(part is None for part in parts):
         return

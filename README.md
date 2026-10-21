@@ -122,6 +122,9 @@ The data folder is `~/.eeg-bewegungsdaten`. Change it with the environment varia
   the SHA-256 of the file downloaded in October 2026, or it is rejected.
 - Multipart downloads record the expected part numbers. `ingest` refuses an incomplete upload
   before it replaces any output, even if only its last part is missing.
+- If a file of the newest upload is missing or truncated, `ingest` stops with an error for that
+  year and TSO and keeps the existing output. It never falls back to an older upload; run
+  `download` again.
 - The ZIPs are read as streams and never unpacked to disk.
 
 ## Output
