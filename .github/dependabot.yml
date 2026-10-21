@@ -7,3 +7,6 @@ updates:
       interval: monthly
     cooldown:
       default-days: 7
+    # PR titles must follow Conventional Commits (.github/workflows/pr-title.yml)
+    commit-message:
+      prefix: ci

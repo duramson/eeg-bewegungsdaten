@@ -1,0 +1,28 @@
+name: PR title
+
+# Checks that the title of a pull request follows Conventional Commits ("fix: …", "feat: …",
+# "chore: …"). Pull requests are squash-merged with their title as the commit message, so the
+# history of main follows it too. The allowed types are the action's defaults, see
+# CONTRIBUTING.md.
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  title:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    steps:
+      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

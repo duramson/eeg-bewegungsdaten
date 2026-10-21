@@ -530,7 +530,9 @@ local open-MaStR database. Files that are not downloaded, or that changed upstre
 [`analysis/`](analysis/README.md) holds scripts that use the output and compare it with other
 sources. They are not part of the package and need the data folder.
 
-Three GitHub Actions workflows are in `.github/workflows`:
+Pull request titles follow Conventional Commits; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Four GitHub Actions workflows are in `.github/workflows`:
 
 - `ci.yml` runs the pre-commit hooks, mypy and pytest on Python 3.10 to 3.14, and pytest with
   the lowest supported versions (Python 3.10, polars 1.20.0, httpx 0.27.0). It runs on every
@@ -544,6 +546,7 @@ Three GitHub Actions workflows are in `.github/workflows`:
   For a new upload of a known year, it opens one issue. From 16 September on, it opens one if
   the previous year is missing. It never opens a title twice.
   `uv run python .github/scripts/data_issues.py --dry-run` shows what it would open today.
+- `pr-title.yml` checks that the title of every pull request follows Conventional Commits.
 
 The workflows pin their actions by commit. Dependabot proposes updates once a month.
 
