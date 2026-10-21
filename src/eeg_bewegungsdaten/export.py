@@ -28,7 +28,7 @@ import secrets
 import shutil
 import struct
 import tempfile
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +46,7 @@ from eeg_bewegungsdaten.paths import (
     write_json,
     write_text,
 )
+from eeg_bewegungsdaten.progress import Progress
 
 log = logging.getLogger(__name__)
 
@@ -121,10 +122,14 @@ def export(
     out_dir: Path | None = None,
     years: Iterable[int] | None = None,
     ids_path: Path | None = None,
+    *,
+    progress: Progress | None = None,
+    on_year: Callable[[int, dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Write the export of `years` (default: every year with clean files) to `out_dir` (default:
     `export_dir`) and return the content of ``sources.json``. `ids_path` defaults to
-    `anlage_id_path`."""
+    `anlage_id_path`. `progress` gets the clean files (years and TSOs) written so far and their
+    number; `on_year` gets each year and its summary as soon as its file is written."""
     out_dir = out_dir or export_dir(data_dir)
     ids_path = ids_path or anlage_id_path(data_dir)
     if ids_path.resolve().is_relative_to(out_dir.resolve()):
@@ -173,6 +178,9 @@ def export(
     ids = _update_ids(ids_path, keys)
     out_dir.mkdir(parents=True, exist_ok=True)
     years_written: dict[str, dict[str, Any]] = {}
+    written = 0
+    if progress is not None:
+        progress(0, len(files))
     for jahr, uenbs in by_year.items():
         path = out_dir / FILE_NAME.format(jahr)
         # One part per TSO, merged in a streaming way, so that memory stays at one clean file.
@@ -182,10 +190,15 @@ def export(
             for uenb in uenbs:
                 parts.append(work / f"{uenb}.parquet")
                 _rows(data_dir, jahr, uenb, ids).write_parquet(parts[-1])
+                written += 1
+                if progress is not None:
+                    progress(written, len(files))
             write_atomic(path, pl.scan_parquet(parts).sink_parquet)
         finally:
             shutil.rmtree(work, ignore_errors=True)
         years_written[str(jahr)] = _summary(path)
+        if on_year is not None:
+            on_year(jahr, years_written[str(jahr)])
 
     content = {
         "created_at": utc_now(),

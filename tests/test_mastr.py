@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 from pathlib import Path
 from unittest.mock import ANY
 
@@ -550,16 +549,43 @@ def test_clean_files_lists_year_and_tso(data_dir: Path) -> None:
     assert clean_files(data_dir) == [(2025, "amprion")]
 
 
+def test_register_and_bridge_report_progress(data_dir: Path, db: Path) -> None:
+    calls: list[tuple[int, int | None]] = []
+
+    register = load_register(db, progress=lambda done, total: calls.append((done, total)))
+    assert calls[0] == (0, calls[-1][1])
+    assert calls[-1][0] == calls[-1][1]
+
+    calls.clear()
+    load_bridge(data_dir, register, progress=lambda done, total: calls.append((done, total)))
+    files = len(clean_files(data_dir))
+    assert calls[0] == (0, files)
+    assert calls[-1] == (files, files)
+
+
 def test_cli_mastr_prints_hit_rates(
     data_dir: Path, db: Path, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
 ) -> None:
-    assert cli.main(["--data-dir", str(data_dir), "mastr", "--db", str(db)]) == 0
+    assert cli.main(["--data-dir", str(data_dir), "-v", "mastr", "--db", str(db)]) == 0
 
-    header, line = capsys.readouterr().out.splitlines()
-    assert header.split() == ["jahr", "uenb", "rows", "treffer", "zahlung", "codes"]
-    assert line.split()[:5] == ["2025", "amprion", "24", "54.2%", "56.5%"]
-    assert "EEG_NR 1, UNIT_NR 1, MULTIPLE 3, ANLAGENSCHLUESSEL 6, KWK_NR 2" in line
-    assert "DELETED 2" in line
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[0].startswith("✓ MaStR register ")
+    assert lines[1].startswith("✓ Bridge ")
+    assert lines[2] == "Matching 1 clean files (24 rows) with the Marktstammdatenregister"
+    assert lines[3].split()[:8] == [
+        "✓",
+        "2025",
+        "amprion",
+        "24",
+        "rows",
+        "54.2%",
+        "matched",
+        "56.5%",
+    ]
+    codes = lines[4]
+    assert "EEG_NR 1, UNIT_NR 1, MULTIPLE 3, ANLAGENSCHLUESSEL 6, KWK_NR 2" in codes
+    assert "DELETED 2" in codes
+    assert "Rows     24 · 54.2% matched · 56.5% of payments" in lines
     assert output_paths(data_dir, 2025, "amprion").mastr.exists()
     assert "Missing MaStR tables" in caplog.text
     assert "AnlagenEegWasser" in caplog.text
@@ -569,17 +595,18 @@ def test_cli_mastr_prints_hit_rates(
 def test_cli_mastr_builds_the_bridge_from_all_years(
     years_dir: Path, db: Path, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
 ) -> None:
-    caplog.set_level(logging.INFO)
-    args = ["--data-dir", str(years_dir), "mastr", "--db", str(db), "--year", "2019"]
+    args = ["--data-dir", str(years_dir), "-v", "mastr", "--db", str(db), "--year", "2019"]
     assert cli.main(args) == 0
 
-    assert (
-        "Bridge from the rows matched by number of 2024 to 2025: 3 Anlagenschluessel of one EEG "
-        "plant, 1 of several (not used)"
-    ) in caplog.text
-    _, line = capsys.readouterr().out.splitlines()
-    assert line.split()[:5] == ["2019", "transnetbw", "7", "57.1%", "57.1%"]
-    assert "ANLAGENSCHLUESSEL 1, ANLAGENSCHLUESSEL_BRUECKE 3, NOT_FOUND 3" in line
+    lines = capsys.readouterr().err.splitlines()
+    bridge = lines[1]
+    assert "3 Anlagenschluessel of one EEG plant  1 of several, not used" in bridge
+    assert "from the rows matched by number of 2024 to 2025" in bridge
+    row = lines[3]
+    assert row.split()[:5] == ["✓", "2019", "transnetbw", "7", "rows"]
+    assert "+3 bridge 42.9%" in row
+    assert "ANLAGENSCHLUESSEL 1, ANLAGENSCHLUESSEL_BRUECKE 3, NOT_FOUND 3" in lines[4]
+    assert "Bridge   +3 rows (42.9%) · 0.0 m € · 2019 +42.9%" in lines
     assert not output_paths(years_dir, 2025, "amprion").mastr.exists()
 
 
