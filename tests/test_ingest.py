@@ -465,7 +465,9 @@ def test_progress_reports_the_csv_bytes_read(data_dir: Path) -> None:
     upload = archive(data_dir, amprion_members())
     calls: list[tuple[int, int | None]] = []
 
-    ingest(upload, data_dir, block_size=64, progress=lambda done, total: calls.append((done, total)))
+    ingest(
+        upload, data_dir, block_size=64, progress=lambda done, total: calls.append((done, total))
+    )
 
     total = data_size(upload.path)
     assert calls[0] == (0, total)
