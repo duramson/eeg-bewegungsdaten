@@ -34,8 +34,15 @@ from eeg_bewegungsdaten.paths import (
     write_atomic,
     write_json,
 )
+from eeg_bewegungsdaten.progress import Progress
 from eeg_bewegungsdaten.quality import NUMBER_COLUMNS, check
-from eeg_bewegungsdaten.reader import BLOCK_SIZE, iter_chunks, skipped_members, to_text
+from eeg_bewegungsdaten.reader import (
+    BLOCK_SIZE,
+    data_size,
+    iter_chunks,
+    skipped_members,
+    to_text,
+)
 from eeg_bewegungsdaten.schema import IGNORED_PREFIX, FormatError
 
 log = logging.getLogger(__name__)
@@ -95,10 +102,15 @@ def _check_parts(files: Sequence[ArchivedFile]) -> None:
 
 
 def ingest(
-    upload: ArchivedFile | Sequence[ArchivedFile], data_dir: Path, block_size: int = BLOCK_SIZE
+    upload: ArchivedFile | Sequence[ArchivedFile],
+    data_dir: Path,
+    block_size: int = BLOCK_SIZE,
+    *,
+    progress: Progress | None = None,
 ) -> dict[str, Any]:
     """Read one upload (a ZIP or all its parts), write text layer, clean rows, quarantine and
-    report; return the report."""
+    report; return the report. `progress` gets the uncompressed bytes of the CSV files read so
+    far and their total; writing the outputs follows once all are read."""
     files = [upload] if isinstance(upload, ArchivedFile) else list(upload)
     if not files:
         raise ValueError("Nothing to ingest")
@@ -106,7 +118,11 @@ def ingest(
     jahr = int(files[0].meta["year"])
     uenb = str(files[0].meta["uenb"])
     outputs = output_paths(data_dir, jahr, uenb)
-    log.info("Reading %s %s from %s", jahr, uenb, ", ".join(str(f.path) for f in files))
+    log.debug("Reading %s %s from %s", jahr, uenb, ", ".join(str(f.path) for f in files))
+    total = sum(data_size(f.path) for f in files) if progress is not None else None
+    positions: dict[tuple[str, str], int] = {}
+    if progress is not None:
+        progress(0, total)
 
     members: dict[str, dict[str, Any]] = {}
     codes: Counter[str] = Counter()
@@ -170,6 +186,9 @@ def ingest(
             ).write_parquet(text_parts[-1])
             clean.write_parquet(clean_parts[-1])
             quarantine.write_parquet(quarantine_parts[-1])
+            if progress is not None:
+                positions[archived.path.name, chunk.member] = chunk.position
+                progress(sum(positions.values()), total)
 
         if not members:
             raise FormatError(f"{', '.join(str(f.path) for f in files)}: no data files in the ZIP")

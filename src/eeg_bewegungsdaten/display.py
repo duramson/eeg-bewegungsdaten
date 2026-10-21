@@ -1,10 +1,10 @@
 """Terminal output of the command line interface, on stderr.
 
-On a terminal, `download` keeps a live area at the bottom: the running file with its bar, the
-next files in the queue, a rule and a summary that updates while the run goes on. Each finished
-file prints a line above it, with size, time, average speed, source and checksum. Elsewhere (a
-pipe, CI, a log file) only these lines and the final summary are printed, with ASCII symbols if
-the output cannot encode Unicode.
+Commands that work through a list of files (`download`, `ingest`) share one display. On a
+terminal it keeps a live area at the bottom: the running item with its bar, the next items in the
+queue, a rule and a summary that updates while the run goes on. Each finished item prints a line
+above it. Elsewhere (a pipe, CI, a log file) only these lines and the final summary are printed,
+with ASCII symbols if the output cannot encode Unicode. All colors come from `THEME`.
 """
 
 from __future__ import annotations
@@ -14,9 +14,11 @@ import sys
 import threading
 import time
 from collections import deque
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import TracebackType
+from typing import Any, ClassVar, TypeVar
 from urllib.parse import urlsplit
 
 import httpx
@@ -61,7 +63,9 @@ THEME = Theme(
     }
 )
 
-#: Files of the queue shown below the running one
+_Display = TypeVar("_Display", bound="RunDisplay")
+
+#: Items of the queue shown below the running one
 QUEUE_ROWS = 4
 #: Seconds over which the current speed is measured
 SPEED_WINDOW = 3.0
@@ -83,8 +87,8 @@ def log_handler(output: Console) -> logging.Handler:
 
 @dataclass(frozen=True)
 class _Symbols:
-    downloaded: str
-    archived: str
+    done: str
+    skipped: str
     failed: str
     waiting: str
     separator: str
@@ -110,7 +114,7 @@ def _duration(seconds: float) -> str:
 
 
 def _took(seconds: float) -> str:
-    """The time of one file: tenths of a second below a minute."""
+    """The time of one item: tenths of a second below a minute."""
     return f"{seconds:.1f}s" if seconds < 60 else _duration(seconds)
 
 
@@ -124,7 +128,7 @@ def _source(url: str) -> str:
 
 
 def reason(error: Exception) -> str:
-    """A short cause for the line of a failed file; the URL is printed in the summary."""
+    """A short cause for the line of a failed item; details follow in the summary."""
     if isinstance(error, httpx.HTTPStatusError):
         return f"HTTP {error.response.status_code} {error.response.reason_phrase}"
     if isinstance(error, httpx.TimeoutException):
@@ -139,17 +143,22 @@ def reason(error: Exception) -> str:
 
 
 @dataclass
-class _File:
-    """One file of the run and what is known about it so far."""
+class Item:
+    """One file or upload of a run and what is known about it so far."""
 
-    link: DownloadLink
-    archived: bool
-    state: str = "waiting"  # running, downloaded, archived or failed
+    key: str
+    year: int | None
+    name: str
+    part: str = ""
+    skip: bool = False
+    """Known in advance to need no work, such as a file already in the archive."""
+    total: int | None = None
+    """Bytes to process, if known before the item starts."""
+    state: str = "waiting"  # running, done, skipped or failed
     started: float = 0.0
     seconds: float = 0.0
-    received: int = 0
-    total: int | None = None
-    result: ArchivedFile | None = None
+    amount: int = 0
+    result: Any = None
     error: Exception | None = None
     samples: deque[tuple[float, int]] = field(default_factory=lambda: deque(maxlen=64))
     spinner: Spinner = field(default_factory=lambda: Spinner("dots", style="eeg.accent"))
@@ -164,212 +173,182 @@ class _File:
         return (b1 - b0) / (t1 - t0) if t1 > t0 else 0.0
 
 
-@dataclass
-class DownloadDisplay:
-    """What `download` prints: a header, a line per file, the live area, a summary."""
+class RunDisplay:
+    """The shared display of a run over `items`; subclasses fill in the columns and numbers."""
 
-    output: Console
-    links: list[DownloadLink]
-    archived: set[str]
-    data_dir: Path
-    verbose: bool = False
-    files: list[_File] = field(init=False)
-    symbols: _Symbols = field(init=False)
-    _by_url: dict[str, _File] = field(init=False)
-    _started: float = field(init=False)
-    _live: Live | None = None
-    _lock: threading.Lock = field(default_factory=threading.Lock)
-    _interrupted: bool = False
+    #: Words for the states in the summary, and their style
+    states: ClassVar[dict[str, tuple[str, str]]] = {
+        "running": ("running", "eeg.accent"),
+        "waiting": ("waiting", "eeg.muted"),
+        "done": ("done", "eeg.ok"),
+        "skipped": ("skipped", "eeg.muted"),
+        "failed": ("failed", "eeg.error"),
+    }
+    #: What the items are, for the summary
+    noun = "Files"
+    #: What to do about failed items
+    retry_hint = "Run the same command again to retry the failed items."
 
-    def __post_init__(self) -> None:
-        self.files = [_File(link, link.url in self.archived) for link in self.links]
-        self._by_url = {file.link.url: file for file in self.files}
-        self.symbols = _symbols(self.output)
+    def __init__(self, output: Console, items: Sequence[Item], *, verbose: bool = False) -> None:
+        self.output = output
+        self.items = list(items)
+        self.verbose = verbose
+        self.symbols = _symbols(output)
+        self._by_key = {item.key: item for item in self.items}
+        self._name_width = max((len(item.name) for item in self.items), default=0)
+        self._part_width = max((len(item.part) for item in self.items), default=0)
         self._started = time.monotonic()
-        self._uenb_width = max(len(self._uenb(link)) for link in self.links)
-        self._part_width = max(len(self._part(link)) for link in self.links)
+        self._live: Live | None = None
+        self._lock = threading.Lock()
+        self._interrupted = False
 
-    # Lines of single files
+    # What subclasses fill in
 
-    @staticmethod
-    def _uenb(link: DownloadLink) -> str:
-        return link.uenb or ("legend" if link.kind == "legende" else link.kind)
+    def header(self) -> Text:
+        raise NotImplementedError
 
-    @staticmethod
-    def _part(link: DownloadLink) -> str:
-        if link.part is None:
-            return ""
-        return f"part {link.part}/{max((*link.expected_parts, link.part))}"
+    def done_cells(self, item: Item) -> list[Text]:
+        """The columns after the name of a finished item."""
+        return []
 
-    def _name(self, link: DownloadLink) -> str:
-        """Year, TSO and part, padded to the widest of the run."""
-        name = f"{link.year or '-':<4} {self._uenb(link):<{self._uenb_width}}"
+    def skipped_cells(self, item: Item) -> list[Text]:
+        return [Text("skipped", "eeg.muted")]
+
+    def failure_detail(self, item: Item) -> str | None:
+        """A second line for a failed item in the final summary, such as its URL."""
+        return None
+
+    def summary_lines(self, now: float, final: bool) -> list[tuple[str, Text | str]]:
+        """Lines between the counts and the time, such as rows or bytes."""
+        return []
+
+    def final_lines(self) -> list[tuple[str, Text | str]]:
+        """Lines after the time in the final summary, such as where the output went."""
+        return []
+
+    def running_note(self, item: Item) -> str | None:
+        """Text instead of speed and time left, e.g. for a phase that has no progress."""
+        return None
+
+    # Lines of single items
+
+    def _name(self, item: Item) -> str:
+        """Year, name and part, padded to the widest of the run."""
+        name = f"{item.year or '-':<4} {item.name:<{self._name_width}}"
         if self._part_width:
-            name += f" {self._part(link):<{self._part_width}}"
+            name += f" {item.part:<{self._part_width}}"
         return name
 
-    def _row(self, symbol: Text, link: DownloadLink, *rest: Text) -> Text:
-        """One file as a line of text: it never gets squeezed, whatever the width of the output."""
-        line = Text.assemble(symbol, " ", self._name(link))
-        for part in rest:
-            if part.plain:
+    def _row(self, symbol: Text, item: Item, cells: list[Text]) -> Text:
+        """One item as a line of text: it never gets squeezed, whatever the width of the output."""
+        line = Text.assemble(symbol, " ", self._name(item))
+        for cell in cells:
+            if cell.plain:
                 line.append("  ")
-                line.append_text(part)
+                line.append_text(cell)
         return line
 
-    def _done_row(self, file: _File) -> Text:
-        result = file.result
-        if file.state == "failed":
-            assert file.error is not None
-            took = f"after {_took(file.seconds)}" if file.seconds else ""
+    def _done_row(self, item: Item) -> Text:
+        if item.state == "failed":
+            assert item.error is not None
+            took = f"after {_took(item.seconds)}" if item.seconds else ""
+            cells = [Text(reason(item.error), "eeg.error"), Text(took, "eeg.muted")]
+            return self._row(Text(self.symbols.failed, "eeg.error"), item, cells)
+        if item.state == "skipped":
             return self._row(
-                Text(self.symbols.failed, "eeg.error"),
-                file.link,
-                Text(reason(file.error), "eeg.error"),
-                Text(took, "eeg.muted"),
+                Text(self.symbols.skipped, "eeg.muted"), item, self.skipped_cells(item)
             )
-        assert result is not None
-        size = Text(f"{decimal(int(result.meta['size'])):>9}")
-        checksum = Text(f"sha256 {result.meta['sha256'][:12]}", "eeg.muted")
-        if file.state == "archived":
-            day = str(result.meta.get("downloaded_at", ""))[:10]
-            return self._row(
-                Text(self.symbols.archived, "eeg.muted"),
-                file.link,
-                Text(size.plain, "eeg.muted"),
-                Text(f"in the archive since {day}", "eeg.muted"),
-                checksum,
-            )
-        source = _source(str(result.meta.get("source_url") or result.meta["url"]))
-        return self._row(
-            Text(self.symbols.downloaded, "eeg.ok"),
-            file.link,
-            size,
-            Text(f"{_took(file.seconds):>5}"),
-            Text(f"{_rate(int(result.meta['size']), file.seconds):>10}"),
-            Text(f"{source:<18}", "eeg.warn" if source == "Wayback Machine" else "eeg.accent"),
-            checksum,
-        )
+        return self._row(Text(self.symbols.done, "eeg.ok"), item, self.done_cells(item))
 
-    def _running_row(self, file: _File, now: float) -> Table:
-        """The bar of a running file; only on a terminal, so the width is known."""
-        bar = ProgressBar(
-            total=file.total,
-            completed=file.received,
-            width=28,
-            pulse=file.total is None,
-        )
-        amount = decimal(file.received)
-        if file.total:
-            amount += f" / {decimal(file.total)}"
-        speed = file.speed(now)
-        left = ""
-        if file.total and speed > 0:
-            left = f"{_duration((file.total - file.received) / speed)} left"
+    def _running_row(self, item: Item, now: float) -> Table:
+        """The bar of a running item; only on a terminal, so the width is known."""
+        bar = ProgressBar(total=item.total, completed=item.amount, width=28, pulse=not item.total)
+        amount = decimal(item.amount)
+        if item.total:
+            amount += f" / {decimal(item.total)}"
+        note = self.running_note(item)
+        speed = item.speed(now)
+        rate = f"{decimal(int(speed))}/s" if speed and note is None else ""
+        left = note or ""
+        if note is None and item.total and speed > 0:
+            left = f"{_duration((item.total - item.amount) / speed)} left"
         grid = Table.grid(padding=(0, 1))
         grid.add_row(
-            file.spinner,
-            self._name(file.link),
+            item.spinner,
+            self._name(item),
             bar,
             Text(f"{amount:>21}"),
-            Text(f"{decimal(int(speed)) + '/s' if speed else '':>10}"),
+            Text(f"{rate:>10}"),
             Text(left, "eeg.muted"),
         )
         return grid
 
-    def _waiting_row(self, file: _File) -> Text:
-        note = "in the archive" if file.archived else "waiting"
-        return self._row(
-            Text(self.symbols.waiting, "eeg.muted"), file.link, Text(note, "eeg.muted")
-        )
+    def _waiting_row(self, item: Item) -> Text:
+        note = self.skipped_cells(item)[0].plain if item.skip else "waiting"
+        symbol = Text(self.symbols.waiting, "eeg.muted")
+        return self._row(symbol, item, [Text(note, "eeg.muted")])
 
     # The summary
 
-    def _counts(self) -> dict[str, int]:
-        counts = dict.fromkeys(("waiting", "running", "downloaded", "archived", "failed"), 0)
-        for file in self.files:
-            counts[file.state] += 1
-        return counts
+    def _received(self) -> int:
+        return sum(item.amount for item in self.items if item.state in ("running", "done"))
+
+    def _busy(self, now: float) -> float:
+        """Seconds spent on items that did some work."""
+        return sum(i.seconds for i in self.items if i.state == "done") + sum(
+            now - i.started for i in self.items if i.state == "running"
+        )
+
+    def _expected(self) -> int | None:
+        """Bytes of the whole run: the known sizes, and their average for the unknown ones."""
+        work = [i for i in self.items if i.state in ("running", "done", "waiting") and not i.skip]
+        known = [i.total for i in work if i.total]
+        if not known:
+            return None
+        unknown = sum(1 for i in work if not i.total)
+        return sum(known) + unknown * sum(known) // len(known)
 
     def _summary(self, now: float, final: bool = False) -> Group:
-        counts = self._counts()
         s = self.symbols.separator
-        downloaded = [f for f in self.files if f.state == "downloaded"]
-        received = sum(f.received for f in self.files if f.state in ("downloaded", "running"))
-        busy = sum(f.seconds for f in downloaded) + sum(
-            now - f.started for f in self.files if f.state == "running"
-        )
-        wayback = sum(
-            1
-            for f in downloaded
-            if f.result and _source(str(f.result.meta.get("source_url"))) == "Wayback Machine"
-        )
-
+        counts = dict.fromkeys(self.states, 0)
+        for item in self.items:
+            counts[item.state] += 1
         lines: list[RenderableType] = []
 
         def add(name: str, value: Text | str) -> None:
             lines.append(Text.assemble((f"{name:<9}", "eeg.label"), value))
 
-        files = Text()
-        done = counts["downloaded"] + counts["archived"] + counts["failed"]
-        files.append(f"{done}/{len(self.files)} done")
-        for state, style in (
-            ("running", "eeg.accent"),
-            ("waiting", "eeg.muted"),
-            ("downloaded", "eeg.ok"),
-            ("archived", "eeg.muted"),
-            ("failed", "eeg.error"),
-        ):
-            if counts[state] or state in ("downloaded", "failed"):
-                files.append(s)
-                files.append(f"{counts[state]} {state}", style if counts[state] else "")
-        add("Files", files)
+        finished = counts["done"] + counts["skipped"] + counts["failed"]
+        line = Text(f"{finished}/{len(self.items)} done")
+        for state, (word, style) in self.states.items():
+            if counts[state] or state in ("done", "failed"):
+                line.append(s)
+                line.append(f"{counts[state]} {word}", style if counts[state] else "")
+        add(self.noun, line)
 
-        data = f"{decimal(received)} received"
-        if busy > 0:
-            data += f"{s}{_rate(received, busy)} average"
-        now_speed = sum(f.speed(now) for f in self.files if f.state == "running")
-        if not final and now_speed:
-            data += f"{s}{decimal(int(now_speed))}/s now"
-        if wayback:
-            data += f"{s}{wayback} from the Wayback Machine"
-        add("Data", data)
+        for name, value in self.summary_lines(now, final):
+            add(name, value)
 
+        received, busy, expected = self._received(), self._busy(now), self._expected()
         elapsed = f"{_duration(now - self._started)} elapsed"
-        left = self._time_left(now, received, busy)
-        if not final and left is not None:
-            elapsed += f"{s}about {_duration(left)} left"
+        if not final and expected and received and busy > 0:
+            left = (expected - received) / (received / busy)
+            elapsed += f"{s}about {_duration(max(left, 0))} left"
         add("Time", elapsed)
 
-        if not final:
-            expected = self._expected_bytes(received)
-            bar = ProgressBar(
-                total=expected or len(self.files),
-                completed=received if expected else done,
-                width=40,
-            )
-            share = received / expected if expected else done / len(self.files)
-            overall = Table.grid(padding=(0, 1))
-            overall.add_row(Text("Overall  ", "eeg.label"), bar, Text(f"{share:4.0%}"))
-            lines.append(overall)
+        if final:
+            for name, value in self.final_lines():
+                add(name, value)
         else:
-            add("Archive", str(self.data_dir / "raw"))
+            share = min(received / expected, 1.0) if expected else finished / len(self.items)
+            bar = ProgressBar(total=1.0, completed=share, width=40)
+            overall = Table.grid(padding=(0, 1))
+            overall.add_row(Text(f"{'Overall':<8}", "eeg.label"), bar, Text(f"{share:4.0%}"))
+            lines.append(overall)
         return Group(*lines)
 
-    def _expected_bytes(self, received: int) -> int | None:
-        """Bytes of the whole run: known sizes, and the average size for the files not started."""
-        sizes = [f.total for f in self.files if f.state in ("downloaded", "running") and f.total]
-        if not sizes:
-            return None
-        pending = sum(1 for f in self.files if f.state == "waiting" and not f.archived)
-        running_left = sum((f.total or 0) - f.received for f in self.files if f.state == "running")
-        return received + running_left + pending * sum(sizes) // len(sizes)
-
-    def _time_left(self, now: float, received: int, busy: float) -> float | None:
-        expected = self._expected_bytes(received)
-        if expected is None or busy <= 0 or received <= 0:
-            return None
-        return (expected - received) / (received / busy)
+    def _speed_now(self, now: float) -> float:
+        return sum(item.speed(now) for item in self.items if item.state == "running")
 
     # The live area
 
@@ -377,24 +356,18 @@ class DownloadDisplay:
         now = time.monotonic()
         with self._lock:
             rows: list[RenderableType] = [
-                self._running_row(f, now) for f in self.files if f.state == "running"
+                self._running_row(i, now) for i in self.items if i.state == "running"
             ]
-            waiting = [f for f in self.files if f.state == "waiting"]
-            rows += [self._waiting_row(f) for f in waiting[:QUEUE_ROWS]]
+            waiting = [i for i in self.items if i.state == "waiting"]
+            rows += [self._waiting_row(i) for i in waiting[:QUEUE_ROWS]]
             if len(waiting) > QUEUE_ROWS:
                 more = f"  {self.symbols.ellipsis} {len(waiting) - QUEUE_ROWS} more waiting"
                 rows.append(Text(more, "eeg.muted"))
             return Group(*rows, Rule(), self._summary(now))
 
-    def __enter__(self) -> DownloadDisplay:
+    def __enter__(self: _Display) -> _Display:
         self.output.push_theme(THEME)
-        header = Text()
-        header.append("Downloading ", "eeg.heading")
-        header.append(f"{len(self.files)} files", "eeg.heading")
-        header.append(f" to {self.data_dir}")
-        if self.archived:
-            header.append(f", {len(self.archived)} of them already archived", "eeg.muted")
-        self.output.print(header)
+        self.output.print(self.header())
         if self.output.is_terminal:
             self._live = Live(self, console=self.output, refresh_per_second=8, transient=True)
             self._live.start()
@@ -415,47 +388,46 @@ class DownloadDisplay:
 
     # Calls from the command
 
-    def start(self, link: DownloadLink) -> Progress | None:
-        """Mark `link` as running and return the callback that moves its bar."""
-        file = self._by_url[link.url]
+    def start(self, key: str) -> Progress:
+        """Mark the item as running and return the callback that moves its bar."""
+        item = self._by_key[key]
         with self._lock:
-            file.state = "running"
-            file.started = time.monotonic()
+            item.state = "running"
+            item.started = time.monotonic()
 
         def progress(done: int, total: int | None) -> None:
             now = time.monotonic()
             with self._lock:
-                if done < file.received:  # a new attempt, e.g. the Wayback copy
-                    file.samples.clear()
-                file.received, file.total = done, total
-                file.samples.append((now, done))
+                if done < item.amount:  # a new attempt, e.g. the Wayback copy
+                    item.samples.clear()
+                item.amount, item.total = done, total
+                item.samples.append((now, done))
 
         return progress
 
-    def finished(self, link: DownloadLink, result: ArchivedFile) -> None:
-        file = self._by_url[link.url]
+    def finish(self, key: str, result: Any, *, size: int, skipped: bool = False) -> None:
+        """Mark the item as done (or skipped) with `size` bytes processed, and print its line."""
+        item = self._by_key[key]
         with self._lock:
-            file.result = result
-            file.state = "downloaded" if result.downloaded else "archived"
-            file.seconds = time.monotonic() - file.started if result.downloaded else 0.0
-            file.received = int(result.meta["size"]) if result.downloaded else 0
-            file.total = int(result.meta["size"])
-        self.output.print(self._done_row(file))
-        if self.verbose:
-            self.output.print(Text(f"  {result.meta['sha256']}  {result.path}", "eeg.muted"))
+            item.result = result
+            item.state = "skipped" if skipped else "done"
+            item.seconds = 0.0 if skipped else time.monotonic() - item.started
+            item.amount = 0 if skipped else size
+            item.total = size
+        self.output.print(self._done_row(item))
 
-    def failed(self, link: DownloadLink, error: Exception) -> None:
-        file = self._by_url[link.url]
+    def fail(self, key: str, error: Exception) -> None:
+        item = self._by_key[key]
         with self._lock:
-            file.error = error
-            file.state = "failed"
-            file.seconds = time.monotonic() - file.started
-            file.received = 0
-        self.output.print(self._done_row(file))
+            item.error = error
+            item.state = "failed"
+            item.seconds = time.monotonic() - item.started
+            item.amount = 0
+        self.output.print(self._done_row(item))
 
     @property
-    def failures(self) -> list[_File]:
-        return [file for file in self.files if file.state == "failed"]
+    def failures(self) -> list[Item]:
+        return [item for item in self.items if item.state == "failed"]
 
     def _final(self) -> None:
         now = time.monotonic()
@@ -465,15 +437,207 @@ class DownloadDisplay:
         elif failures:
             title = Text(f"{self.symbols.failed} Finished with errors", "eeg.error")
         else:
-            title = Text(f"{self.symbols.downloaded} Done", "eeg.ok")
+            title = Text(f"{self.symbols.done} Done", "eeg.ok")
         self.output.print()
         self.output.print(Rule(title, align="left"))
         self.output.print(self._summary(now, final=True))
         if failures:
             self.output.print()
-            for file in failures:
-                assert file.error is not None
-                self.output.print(self._done_row(file))
-                # On a line of its own, so that a long URL does not squeeze the columns
-                self.output.print(Text(f"  {file.link.url}", "eeg.muted"))
-            self.output.print("Run the same command again to retry the failed files.")
+            for item in failures:
+                self.output.print(self._done_row(item))
+                detail = self.failure_detail(item)
+                if detail:
+                    # On a line of its own, so that a long URL does not squeeze the columns
+                    self.output.print(Text(f"  {detail}", "eeg.muted"))
+            self.output.print(self.retry_hint)
+
+
+def _link_item(link: DownloadLink, archived: set[str]) -> Item:
+    part = ""
+    if link.part is not None:
+        part = f"part {link.part}/{max((*link.expected_parts, link.part))}"
+    name = link.uenb or ("legend" if link.kind == "legende" else link.kind)
+    return Item(link.url, link.year, name, part, skip=link.url in archived)
+
+
+class DownloadDisplay(RunDisplay):
+    """`download`: size, time, speed, source and checksum per file."""
+
+    states: ClassVar[dict[str, tuple[str, str]]] = {
+        **RunDisplay.states,
+        "done": ("downloaded", "eeg.ok"),
+        "skipped": ("archived", "eeg.muted"),
+    }
+    retry_hint = "Run the same command again to retry the failed files."
+
+    def __init__(
+        self,
+        output: Console,
+        links: Sequence[DownloadLink],
+        archived: set[str],
+        data_dir: Path,
+        *,
+        verbose: bool = False,
+    ) -> None:
+        super().__init__(output, [_link_item(link, archived) for link in links], verbose=verbose)
+        self.links = {link.url: link for link in links}
+        self.archived = archived
+        self.data_dir = data_dir
+
+    def header(self) -> Text:
+        header = Text.assemble(
+            ("Downloading ", "eeg.heading"),
+            (f"{len(self.items)} files", "eeg.heading"),
+            f" to {self.data_dir}",
+        )
+        if self.archived:
+            header.append(f", {len(self.archived)} of them already archived", "eeg.muted")
+        return header
+
+    def done_cells(self, item: Item) -> list[Text]:
+        meta = item.result.meta
+        source = _source(str(meta.get("source_url") or meta["url"]))
+        return [
+            Text(f"{decimal(int(meta['size'])):>9}"),
+            Text(f"{_took(item.seconds):>5}"),
+            Text(f"{_rate(int(meta['size']), item.seconds):>10}"),
+            Text(f"{source:<18}", "eeg.warn" if source == "Wayback Machine" else "eeg.accent"),
+            Text(f"sha256 {meta['sha256'][:12]}", "eeg.muted"),
+        ]
+
+    def skipped_cells(self, item: Item) -> list[Text]:
+        if item.result is None:  # still in the queue
+            return [Text("in the archive", "eeg.muted")]
+        meta = item.result.meta
+        day = str(meta.get("downloaded_at", ""))[:10]
+        return [
+            Text(f"{decimal(int(meta['size'])):>9}", "eeg.muted"),
+            Text(f"in the archive since {day}", "eeg.muted"),
+            Text(f"sha256 {meta['sha256'][:12]}", "eeg.muted"),
+        ]
+
+    def failure_detail(self, item: Item) -> str:
+        return item.key
+
+    def summary_lines(self, now: float, final: bool) -> list[tuple[str, Text | str]]:
+        s = self.symbols.separator
+        received, busy = self._received(), self._busy(now)
+        data = f"{decimal(received)} received"
+        if busy > 0:
+            data += f"{s}{_rate(received, busy)} average"
+        speed = self._speed_now(now)
+        if not final and speed:
+            data += f"{s}{decimal(int(speed))}/s now"
+        wayback = sum(
+            1
+            for i in self.items
+            if i.state == "done"
+            and _source(str(i.result.meta.get("source_url"))) == "Wayback Machine"
+        )
+        if wayback:
+            data += f"{s}{wayback} from the Wayback Machine"
+        return [("Data", data)]
+
+    def final_lines(self) -> list[tuple[str, Text | str]]:
+        return [("Archive", str(self.data_dir / "raw"))]
+
+    # The calls of `download`, by link
+
+    def finished(self, link: DownloadLink, result: ArchivedFile) -> None:
+        size = int(result.meta["size"])
+        self.finish(link.url, result, size=size, skipped=not result.downloaded)
+        if self.verbose:
+            self.output.print(Text(f"  {result.meta['sha256']}  {result.path}", "eeg.muted"))
+
+    def failed(self, link: DownloadLink, error: Exception) -> None:
+        self.fail(link.url, error)
+
+
+@dataclass(frozen=True)
+class Upload:
+    """What `ingest` reads for one year and TSO."""
+
+    year: int
+    uenb: str
+    paths: list[Path]
+    size: int
+    """Uncompressed bytes of its CSV files"""
+
+    @property
+    def key(self) -> str:
+        return f"{self.year}/{self.uenb}"
+
+
+class IngestDisplay(RunDisplay):
+    """`ingest`: rows, clean rows, quarantine, time and throughput per upload."""
+
+    noun = "Uploads"
+    states: ClassVar[dict[str, tuple[str, str]]] = {
+        **RunDisplay.states,
+        "done": ("read", "eeg.ok"),
+    }
+    retry_hint = (
+        "The outputs of the failed uploads were left as they were. A FormatError usually means "
+        "a new file layout: update eeg-bewegungsdaten, or report it."
+    )
+
+    def __init__(
+        self, output: Console, uploads: Sequence[Upload], data_dir: Path, *, verbose: bool = False
+    ) -> None:
+        items = [Item(u.key, u.year, u.uenb, total=u.size) for u in uploads]
+        super().__init__(output, items, verbose=verbose)
+        self.uploads = {u.key: u for u in uploads}
+        self.data_dir = data_dir
+
+    def header(self) -> Text:
+        size = decimal(sum(u.size for u in self.uploads.values()))
+        return Text.assemble(
+            ("Reading ", "eeg.heading"),
+            (f"{len(self.items)} uploads", "eeg.heading"),
+            f" ({size} of CSV) from {self.data_dir / 'raw'}",
+        )
+
+    def done_cells(self, item: Item) -> list[Text]:
+        rows = item.result["rows"]
+        codes = ", ".join(f"{code} {n:,}" for code, n in item.result["quarantine"].items())
+        return [
+            # Up to 9,999,999 rows per upload in fixed columns
+            Text(f"{rows['raw']:>9,} rows"),
+            Text(f"{rows['clean']:>9,} clean"),
+            Text(
+                f"{rows['quarantine']:>7,} quarantine",
+                "eeg.warn" if rows["quarantine"] else "eeg.muted",
+            ),
+            Text(f"{_took(item.seconds):>6}"),
+            Text(f"{_rate(item.amount, item.seconds):>10}"),
+            Text(codes, "eeg.muted"),
+        ]
+
+    def failure_detail(self, item: Item) -> str:
+        return ", ".join(str(path) for path in self.uploads[item.key].paths)
+
+    def running_note(self, item: Item) -> str | None:
+        if item.total and item.amount >= item.total:
+            return "writing the Parquet files"
+        return None
+
+    def summary_lines(self, now: float, final: bool) -> list[tuple[str, Text | str]]:
+        s = self.symbols.separator
+        reports = [i.result for i in self.items if i.state == "done"]
+        raw = sum(r["rows"]["raw"] for r in reports)
+        quarantine = sum(r["rows"]["quarantine"] for r in reports)
+        rows = Text(f"{raw:,} read{s}{raw - quarantine:,} clean{s}")
+        rows.append(f"{quarantine:,} quarantine", "eeg.warn" if quarantine else "")
+        received, busy = self._received(), self._busy(now)
+        data = f"{decimal(received)} of CSV read"
+        if busy > 0:
+            data += f"{s}{_rate(received, busy)} average"
+        speed = self._speed_now(now)
+        if not final and speed:
+            data += f"{s}{decimal(int(speed))}/s now"
+        return [("Rows", rows), ("Data", data)]
+
+    def final_lines(self) -> list[tuple[str, Text | str]]:
+        return [
+            ("Output", f"{self.data_dir}  (text, clean, quarantine, reports)"),
+        ]

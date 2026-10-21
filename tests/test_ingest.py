@@ -16,6 +16,7 @@ from eeg_bewegungsdaten.ingest import ingest, latest_uploads, scan
 from eeg_bewegungsdaten.links import PAGE_URL, find_links
 from eeg_bewegungsdaten.paths import output_paths
 from eeg_bewegungsdaten.quality import check
+from eeg_bewegungsdaten.reader import data_size
 from eeg_bewegungsdaten.schema import CLEAN_SCHEMA, QUARANTINE_SCHEMA, TEXT_SCHEMA, FormatError
 from tests.builders import (
     HEADER,
@@ -420,11 +421,12 @@ def test_cli_ingest_reads_all_parts_once(
 
     assert cli.main(["--data-dir", str(data_dir), "ingest"]) == 0
 
-    lines = capsys.readouterr().out.splitlines()
-    assert [line.split()[:3] for line in lines[1:]] == [
-        ["2024", "tennet", "2"],
-        ["total", "2", "2"],
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[0].startswith("Reading 1 uploads (")
+    assert [line.split()[:5] for line in lines[1 : lines.index("")]] == [
+        ["✓", "2024", "tennet", "2", "rows"],
     ]
+    assert "Rows     2 read · 2 clean · 0 quarantine" in lines
 
 
 def test_scan_combines_years_and_tsos(data_dir: Path) -> None:
@@ -451,9 +453,24 @@ def test_cli_ingest_prints_counts(data_dir: Path, capsys: pytest.CaptureFixture[
 
     assert cli.main(["--data-dir", str(data_dir), "ingest"]) == 0
 
-    out = capsys.readouterr().out
-    assert "BAD_VERAEUSSERUNGSFORM 1" in out
-    assert out.splitlines()[-1].split() == ["total", "4", "3", "1"]
+    lines = capsys.readouterr().err.splitlines()
+    row = lines[1]
+    assert row.split()[:9] == ["✓", "2025", "amprion", "4", "rows", "3", "clean", "1", "quarantine"]
+    assert row.endswith("BAD_VERAEUSSERUNGSFORM 1")
+    assert "Rows     4 read · 3 clean · 1 quarantine" in lines
+    assert lines[lines.index("") + 1].startswith("✓ Done ")
+
+
+def test_progress_reports_the_csv_bytes_read(data_dir: Path) -> None:
+    upload = archive(data_dir, amprion_members())
+    calls: list[tuple[int, int | None]] = []
+
+    ingest(upload, data_dir, block_size=64, progress=lambda done, total: calls.append((done, total)))
+
+    total = data_size(upload.path)
+    assert calls[0] == (0, total)
+    assert calls[-1] == (total, total)
+    assert [done for done, _ in calls] == sorted(done for done, _ in calls)
 
 
 def test_cli_ingest_without_downloads_fails(data_dir: Path) -> None:
@@ -470,7 +487,7 @@ def test_cli_ingest_reports_format_errors_and_goes_on(data_dir: Path) -> None:
 
 @pytest.mark.parametrize("missing", [2, 4])
 def test_incomplete_new_upload_does_not_replace_existing_outputs(
-    data_dir: Path, missing: int, caplog: pytest.LogCaptureFixture
+    data_dir: Path, missing: int, capsys: pytest.CaptureFixture[str]
 ) -> None:
     old = [
         archive_part(
@@ -497,7 +514,9 @@ def test_incomplete_new_upload_does_not_replace_existing_outputs(
             )
 
     assert cli.main(["--data-dir", str(data_dir), "ingest", "--year", "2024"]) == 1
-    assert "expected [1, 2, 3, 4]" in caplog.text
+    failed = [line for line in capsys.readouterr().err.splitlines() if line.startswith("✗ 2024")]
+    assert failed
+    assert all("expected [1, 2, 3, 4]" in line for line in failed)
     assert {path: path.read_bytes() for path in written} == before
 
 

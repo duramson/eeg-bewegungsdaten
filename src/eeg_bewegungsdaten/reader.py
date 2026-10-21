@@ -41,6 +41,8 @@ class Chunk:
     columns: list[str | None]
     frame: pl.DataFrame
     blank_lines: int
+    position: int = 0
+    """Bytes of the CSV file read so far, uncompressed."""
 
 
 def iter_chunks(path: Path, block_size: int = BLOCK_SIZE) -> Iterator[Chunk]:
@@ -52,6 +54,12 @@ def iter_chunks(path: Path, block_size: int = BLOCK_SIZE) -> Iterator[Chunk]:
         for info in _data_members(archive):
             with archive.open(info) as stream:
                 yield from _read_member(info.filename, stream, block_size)
+
+
+def data_size(path: Path) -> int:
+    """Uncompressed bytes of the data files in the ZIP at `path`."""
+    with zipfile.ZipFile(path) as archive:
+        return sum(info.file_size for info in _data_members(archive))
 
 
 def to_text(chunk: Chunk, *, jahr: int, uenb: str) -> pl.DataFrame:
@@ -133,7 +141,7 @@ def _read_member(member: str, stream: IO[bytes], block_size: int) -> Iterator[Ch
         frame = _frame(lines[skip:], next_line + skip, cp1252, undecodable, skip)
         next_line += len(lines)
         blank = frame["rohzeile"].str.contains(_BLANK)
-        yield Chunk(member, header, columns, frame.filter(~blank), int(blank.sum()))
+        yield Chunk(member, header, columns, frame.filter(~blank), int(blank.sum()), stream.tell())
     if header is None:
         yield Chunk(member, [], [], _frame([], 1, [], [], 0), 0)
 
