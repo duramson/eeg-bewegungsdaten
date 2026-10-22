@@ -334,8 +334,13 @@ How many lines of each year and TSO get which code is in
 ## Matching with the Marktstammdatenregister
 
 `mastr` finds the EEG plant in the Marktstammdatenregister (MaStR) for every clean row. It
-writes one row per clean row with the EEG number from the MaStR and how it was found. Join
-this table with MaStR data to get capacity, location or commissioning date of the plants.
+writes one row per clean row with the EEG number from the MaStR and how it was found.
+
+`mastr` adds only what holds for the payment year: the EEG number and the energy source. It
+adds no capacity, location, operator or status. The MaStR export shows these on the day of the
+export, not in the payment year: a plant extended in 2025 would show its new capacity in the
+rows of 2024 too. Join them yourself where you need them, see
+[Add MaStR data](#add-mastr-data).
 
 ### Get the MaStR data with open-MaStR
 
@@ -469,6 +474,48 @@ payments = eeg_bewegungsdaten.scan().join(
     pl.scan_parquet("~/.eeg-bewegungsdaten/mastr/*/*.parquet"), on=key, how="left"
 )
 ```
+
+### Add MaStR data
+
+Capacity, commissioning date, location and the other MaStR data come from the open-MaStR
+database by `mastr_eeg_nr`. For example, the capacity and the EEG commissioning date of PV
+plants:
+
+```python
+import sqlite3
+from contextlib import closing
+from pathlib import Path
+
+import polars as pl
+
+import eeg_bewegungsdaten
+
+db = Path.home() / ".open-MaStR/data/sqlite/open-mastr.db"
+with closing(sqlite3.connect(f"file:{db}?mode=ro", uri=True)) as con:
+    solar = pl.read_database(
+        "SELECT EegMastrNummer, InstallierteLeistung, EegInbetriebnahmedatum FROM AnlagenEegSolar",
+        con,
+    )
+
+key = ["jahr", "uenb", "quelldatei", "zeile"]
+payments = (
+    eeg_bewegungsdaten.scan()
+    .join(pl.scan_parquet("~/.eeg-bewegungsdaten/mastr/*/*.parquet"), on=key, how="left")
+    .join(solar.lazy(), left_on="mastr_eeg_nr", right_on="EegMastrNummer", how="left")
+)
+```
+
+- The values are those of the day of the MaStR export (`DatumDownload`, also in the `mastr`
+  reports), for every year. Some changes have a date in the MaStR: `EegInbetriebnahmedatum`,
+  `Inbetriebnahmedatum` and `DatumEndgueltigeStilllegung` of the units,
+  `DatumDesBetreiberwechsels`, and for biogas `BiogasDatumLeistungserhoehung`.
+- The wind script in [analysis/](analysis/README.md) uses these dates to leave out turbines that
+  started or stopped during the year.
+- Since 1 April 2023 the [download page](https://www.marktstammdatenregister.de/MaStR/Datendownload)
+  also offers the export of the first day of every quarter. open-MaStR loads one with
+  `Mastr().download(select_date_interactively=True)`.
+- Location and capacity make small plants easier to identify. Read
+  [Personal data](#personal-data) before you share the result.
 
 ## Export a dataset to share
 
