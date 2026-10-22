@@ -18,13 +18,13 @@ def console(encoding: str) -> Console:
 
 @pytest.mark.parametrize(("encoding", "symbol"), [("utf-8", "✓"), ("cp1252", "+"), ("ascii", "+")])
 def test_symbols_fall_back_to_ascii(encoding: str, symbol: str) -> None:
-    assert display._symbols(console(encoding)).downloaded == symbol
+    assert display._symbols(console(encoding)).done == symbol
 
 
 def test_label_shows_the_part_of_the_upload() -> None:
     link = classified(TENNET_PART.format(folder="2024", part=2))
     link = dataclasses.replace(link, expected_parts=(1, 2, 3, 4))
-    assert display.DownloadDisplay._part(link) == "part 2/4"
+    assert display._link_item(link, set()).part == "part 2/4"
 
 
 def test_reason_of_an_http_error_is_its_status() -> None:

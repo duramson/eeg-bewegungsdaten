@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import zipfile
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import httpx
 from eeg_bewegungsdaten import display
 from eeg_bewegungsdaten._version import __version__
 from eeg_bewegungsdaten.download import (
+    ArchivedFile,
     ChecksumError,
     DownloadError,
     archive_path,
@@ -33,6 +35,7 @@ from eeg_bewegungsdaten.mastr import (
     load_register,
 )
 from eeg_bewegungsdaten.paths import ENV_VAR, default_data_dir, export_dir
+from eeg_bewegungsdaten.reader import data_size
 from eeg_bewegungsdaten.schema import FormatError
 
 log = logging.getLogger("eeg_bewegungsdaten")
@@ -154,7 +157,7 @@ def _download(args: argparse.Namespace) -> int:
             for link in links:
                 log.debug("%s %s: %s", link.year or "-", link.uenb or link.kind, link.url)
                 try:
-                    result = download(link, data_dir, client, progress=shown.start(link))
+                    result = download(link, data_dir, client, progress=shown.start(link.url))
                 except (httpx.HTTPError, DownloadError) as e:
                     shown.failed(link, e)
                 else:
@@ -180,28 +183,34 @@ def _ingest(args: argparse.Namespace) -> int:
         log.error("No matching downloads in %s; run 'download' first", data_dir)
         return 1
 
-    failed = 0
-    totals = {"raw": 0, "clean": 0, "quarantine": 0}
-    print(f"{'jahr':<6}{'uenb':<12}{'raw':>11}{'clean':>11}{'quarantine':>12}  codes")
-    for files in uploads:
-        try:
-            report = ingest(files, data_dir)
-        except FormatError as e:
-            failed += 1
-            log.error("%s", e)
-            continue
-        rows = report["rows"]
-        for key in totals:
-            totals[key] += rows[key]
-        codes = ", ".join(f"{code} {n}" for code, n in report["quarantine"].items()) or "-"
-        print(
-            f"{report['jahr']:<6}{report['uenb']:<12}"
-            f"{rows['raw']:>11,}{rows['clean']:>11,}{rows['quarantine']:>12,}  {codes}"
+    shown_uploads = [
+        display.Upload(
+            int(files[0].meta["year"]),
+            str(files[0].meta["uenb"]),
+            [f.path for f in files],
+            _data_size(files),
         )
-    print(
-        f"{'':<6}{'total':<12}{totals['raw']:>11,}{totals['clean']:>11,}{totals['quarantine']:>12,}"
-    )
-    return 1 if failed else 0
+        for files in uploads
+    ]
+    with display.IngestDisplay(
+        args.console, shown_uploads, data_dir, verbose=args.verbose
+    ) as shown:
+        for files, upload in zip(uploads, shown_uploads, strict=True):
+            try:
+                report = ingest(files, data_dir, progress=shown.start(upload.key))
+            except FormatError as e:
+                shown.fail(upload.key, e)
+            else:
+                shown.finish(upload.key, report, size=upload.size)
+    return 1 if shown.failures else 0
+
+
+def _data_size(files: Sequence[ArchivedFile]) -> int:
+    """Bytes of the CSV files of an upload; 0 if a file cannot be read, which ingest reports."""
+    try:
+        return sum(data_size(f.path) for f in files)
+    except (OSError, zipfile.BadZipFile):
+        return 0
 
 
 def _mastr(args: argparse.Namespace) -> int:

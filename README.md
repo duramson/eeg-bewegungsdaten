@@ -98,7 +98,8 @@ uv run eeg-bewegungsdaten verify
 - `ingest` reads the newest upload per year and TSO and writes the Parquet files. It takes
   about 15 seconds for 2025 and about two minutes for all years on a current laptop, with
   1.3 GB of memory at most. After an update of the tool, run it again for all years, so that every
-  Parquet file has the same columns.
+  Parquet file has the same columns. It shows the same kind of display as `download`, with the
+  bytes of CSV read per upload, and prints rows, clean rows, quarantine and codes per upload.
 - `mastr` matches the clean rows with the Marktstammdatenregister; see
   [Matching with the Marktstammdatenregister](#matching-with-the-marktstammdatenregister).
 - `export` writes a dataset without the plant keys; see
