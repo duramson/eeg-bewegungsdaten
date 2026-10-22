@@ -457,3 +457,47 @@ def test_cached_download_records_newly_discovered_parts(tmp_path: Path, link: Do
     assert not again.downloaded
     assert third.meta["expected_parts"] == [1, 2]
     assert json.loads(meta_path(first.path).read_text(encoding="utf-8"))["expected_parts"] == [1, 2]
+
+
+def test_progress_reports_the_bytes_received(tmp_path: Path, link: DownloadLink) -> None:
+    calls: list[tuple[int, int | None]] = []
+    server = serve(ZIP, headers={"Content-Length": str(len(ZIP))})
+
+    with server.client() as client:
+        download(link, tmp_path, client, progress=lambda done, total: calls.append((done, total)))
+
+    assert calls[0] == (0, len(ZIP))
+    assert calls[-1] == (len(ZIP), len(ZIP))
+
+
+def test_progress_without_content_length_has_no_total(tmp_path: Path, link: DownloadLink) -> None:
+    calls: list[tuple[int, int | None]] = []
+
+    class Chunked(httpx.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            yield ZIP
+
+    server = Server(lambda request: httpx.Response(200, stream=Chunked()))
+    with server.client() as client:
+        download(link, tmp_path, client, progress=lambda done, total: calls.append((done, total)))
+
+    assert {total for _, total in calls} == {None}
+    assert calls[-1][0] == len(ZIP)
+
+
+def test_progress_starts_over_for_the_wayback_copy(tmp_path: Path) -> None:
+    calls: list[tuple[int, int | None]] = []
+
+    with live_gone().client() as client:
+        download(with_copy(), tmp_path, client, progress=lambda d, t: calls.append((d, t)))
+
+    assert [done for done, _ in calls] == [0, len(ZIP)]
+
+
+def test_finished_download_reports_no_progress(tmp_path: Path, link: DownloadLink) -> None:
+    calls: list[tuple[int, int | None]] = []
+    with serve(ZIP).client() as client:
+        download(link, tmp_path, client)
+        download(link, tmp_path, client, progress=lambda d, t: calls.append((d, t)))
+
+    assert calls == []

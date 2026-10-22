@@ -32,6 +32,7 @@ from eeg_bewegungsdaten._version import __version__
 from eeg_bewegungsdaten.http import new_client
 from eeg_bewegungsdaten.links import PAGE_URL, DownloadLink
 from eeg_bewegungsdaten.paths import raw_dir, utc_now, write_json
+from eeg_bewegungsdaten.progress import Progress
 
 log = logging.getLogger(__name__)
 
@@ -107,9 +108,14 @@ def sha256_of(path: Path) -> str:
 
 
 def download(
-    link: DownloadLink, data_dir: Path, client: httpx.Client | None = None
+    link: DownloadLink,
+    data_dir: Path,
+    client: httpx.Client | None = None,
+    *,
+    progress: Progress | None = None,
 ) -> ArchivedFile:
-    """Download `link` into the archive unless a finished copy is already there."""
+    """Download `link` into the archive unless a finished copy is already there. `progress`
+    gets the bytes received and the `Content-Length`."""
     path = archive_path(data_dir, link)
     meta = read_meta(path)
     if meta is not None:
@@ -117,33 +123,40 @@ def download(
         if expected and meta.get("expected_parts") != expected:
             meta["expected_parts"] = expected
             write_json(meta_path(path), meta)
-        log.info("Already archived: %s", path)
+        log.debug("Already archived: %s", path)
         return ArchivedFile(path, meta, downloaded=False)
 
     http = client or new_client()
     try:
-        meta = _fetch_or_fall_back(http, link, path)
+        meta = _fetch_or_fall_back(http, link, path, progress)
     finally:
         if client is None:
             http.close()
     meta["page_url"] = PAGE_URL if link.listed else None
     write_json(meta_path(path), meta)
-    log.info("Downloaded %s (%d bytes)", path, meta["size"])
+    log.debug("Downloaded %s (%d bytes)", path, meta["size"])
     return ArchivedFile(path, meta, downloaded=True)
 
 
-def _fetch_or_fall_back(http: httpx.Client, link: DownloadLink, path: Path) -> dict[str, Any]:
+def _fetch_or_fall_back(
+    http: httpx.Client, link: DownloadLink, path: Path, progress: Progress | None
+) -> dict[str, Any]:
     try:
-        return _fetch(http, link, path, link.url)
+        return _fetch(http, link, path, link.url, progress=progress)
     except httpx.HTTPStatusError as e:
         if e.response.status_code != 404 or link.fallback_url is None:
             raise
     log.warning("%s answers 404, downloading the Wayback copy %s", link.url, link.fallback_url)
-    return _fetch(http, link, path, link.fallback_url, sha256=link.sha256)
+    return _fetch(http, link, path, link.fallback_url, sha256=link.sha256, progress=progress)
 
 
 def _fetch(
-    http: httpx.Client, link: DownloadLink, path: Path, url: str, sha256: str | None = None
+    http: httpx.Client,
+    link: DownloadLink,
+    path: Path,
+    url: str,
+    sha256: str | None = None,
+    progress: Progress | None = None,
 ) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     part = path.with_name(path.name + ".part")
@@ -152,17 +165,22 @@ def _fetch(
     try:
         with http.stream("GET", url) as response:
             response.raise_for_status()
-            expected = response.headers.get("Content-Length")
+            headers = response.headers
+            expected = headers.get("Content-Length")
+            # Content-Length counts the bytes on the wire, before any Content-Encoding.
+            encoded = headers.get("Content-Encoding", "identity") != "identity"
+            total = int(expected) if expected is not None and expected.isdigit() else None
+            if progress is not None:
+                progress(0, total)
             with part.open("wb") as f:
                 for chunk in response.iter_bytes(CHUNK_SIZE):
                     f.write(chunk)
                     digest.update(chunk)
                     size += len(chunk)
+                    if progress is not None:
+                        progress(response.num_bytes_downloaded if encoded else size, total)
                 f.flush()
                 os.fsync(f.fileno())
-            headers = response.headers
-            # Content-Length counts the bytes on the wire, before any Content-Encoding.
-            encoded = headers.get("Content-Encoding", "identity") != "identity"
             received = response.num_bytes_downloaded if encoded else size
             if expected is not None and int(expected) != received:
                 raise DownloadError(f"{url}: got {received} of {expected} bytes")

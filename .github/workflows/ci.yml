@@ -68,6 +68,6 @@ jobs:
           python-version: "3.10"
       - run: uv sync --locked
       # Keep in step with the lower bounds in pyproject.toml
-      - run: uv pip install polars==1.20.0 httpx==0.27.0
+      - run: uv pip install polars==1.20.0 httpx==0.27.0 rich==13.7.0
       # --no-sync, or uv run would put the locked versions back
       - run: uv run --no-sync pytest

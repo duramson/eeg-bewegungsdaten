@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import io
 from collections.abc import Callable
 from pathlib import Path
 
 import httpx
 import pytest
+from rich.console import Console
 
-from eeg_bewegungsdaten import cli
+from eeg_bewegungsdaten import cli, display
 from eeg_bewegungsdaten.links import PAGE_URL, older_links, parse_links
 from tests.builders import PAGE, zip_bytes
 
@@ -66,7 +68,23 @@ def test_download_filters_by_tso_and_keeps_the_legend(
     assert "amprion" in downloaded[0]
     assert downloaded[1].endswith("bewegungsdaten_legende.xlsx")
     assert downloaded[2:] == older
-    assert len(capsys.readouterr().out.splitlines()) == len(downloaded)
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[0] == f"Downloading {len(downloaded)} files to {tmp_path}"
+    # One line per file, an empty line, the summary
+    rows = lines[1 : lines.index("")]
+    assert len(rows) == len(downloaded)
+    assert all(row.startswith("✓ ") and " sha256 " in row for row in rows)
+    assert lines[lines.index("") + 1].startswith("✓ Done ")
+    assert summary(lines, "Files") == (
+        f"{len(downloaded)}/{len(downloaded)} done · {len(downloaded)} downloaded · 0 failed"
+    )
+    assert summary(lines, "Archive") == str(tmp_path / "raw")
+
+
+def summary(lines: list[str], name: str) -> str:
+    """The value of a line of the final summary."""
+    line = next(line for line in reversed(lines) if line.startswith(f"{name} "))
+    return line.removeprefix(name).strip()
 
 
 def test_download_twice_fetches_only_the_page(requests: list[str], tmp_path: Path) -> None:
@@ -84,12 +102,84 @@ def test_download_goes_on_after_a_failed_file(
 
     assert cli.main(["--data-dir", str(tmp_path), "download", "--uenb", "tennet"]) == 1
 
-    archived = capsys.readouterr().out.splitlines()
+    lines = capsys.readouterr().err.splitlines()
     older = [link for link in OLDER if link.uenb in ("tennet", None)]
+    rows = lines[1 : lines.index("")]
     # TenneT 2025 and the legend from the page, all older files but the one for 2017
-    assert len(archived) == 2 + len(older) - 1
+    assert len([row for row in rows if row.startswith("✓ ")]) == 2 + len(older) - 1
+    failed = [row for row in rows if row.startswith("✗ ")]
+    assert len(failed) == 1
+    assert failed[0].split()[1:3] == ["2017", "tennet"]
+    assert "HTTP 429 Too Many Requests  after " in failed[0]
+    assert lines[lines.index("") + 1].startswith("✗ Finished with errors ")
+    assert summary(lines, "Files").endswith(" · 1 failed")
+    # The failed file again, with its URL
+    assert lines[-3] == failed[0]
+    assert lines[-2].strip().endswith("TenneT_Bewegungsdaten_2017.zip")
+    assert lines[-1] == "Run the same command again to retry the failed files."
     assert not [p for p in (tmp_path / "raw" / "2017").rglob("*") if p.is_file()]
     assert (tmp_path / "raw" / "2018" / "tennet").is_dir()
+
+
+def test_download_twice_lists_the_archived_files(
+    requests: list[str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cli.main(["--data-dir", str(tmp_path), "download", "--uenb", "amprion"])
+    files = len([url for url in requests if url != PAGE_URL])
+    capsys.readouterr()
+
+    assert cli.main(["--data-dir", str(tmp_path), "download", "--uenb", "amprion"]) == 0
+
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[0].endswith(f", {files} of them already archived")
+    rows = lines[1 : lines.index("")]
+    assert len(rows) == files
+    assert all(row.startswith("= ") and " in the archive since " in row for row in rows)
+    assert (
+        summary(lines, "Files")
+        == f"{files}/{files} done · 0 downloaded · {files} archived · 0 failed"
+    )
+    assert summary(lines, "Data") == "0 bytes received"
+
+
+def test_verbose_download_prints_sha256_and_path(
+    requests: list[str], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cli.main(["--data-dir", str(tmp_path), "-v", "download", "--uenb", "amprion"])
+
+    lines = capsys.readouterr().err.splitlines()
+    first = next(i for i, line in enumerate(lines) if line.startswith("✓ "))
+    # File names contain spaces
+    sha256, path = lines[first + 1].split(maxsplit=1)
+    assert len(sha256) == 64
+    assert Path(path).is_file()
+
+
+def test_download_on_a_terminal_shows_the_same_lines(
+    requests: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    out = io.StringIO()
+    terminal = Console(file=out, force_terminal=True, width=120, color_system=None)
+    monkeypatch.setattr(display, "console", lambda: terminal)
+
+    assert cli.main(["--data-dir", str(tmp_path), "download", "--uenb", "amprion"]) == 0
+
+    text = out.getvalue()
+    files = len([url for url in requests if url != PAGE_URL])
+    assert text.count("✓ ") == files + 1
+    assert "✓ Done " in text
+    assert f"{files}/{files} done" in text
+
+
+def test_interrupted_download_ends_without_traceback(
+    requests: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def interrupt(*args: object, **kwargs: object) -> None:
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "download", interrupt)
+
+    assert cli.main(["--data-dir", str(tmp_path), "download"]) == 130
 
 
 def test_download_unknown_year_fails(requests: list[str], tmp_path: Path) -> None:

@@ -4,24 +4,26 @@ from __future__ import annotations
 
 import argparse
 import logging
-import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 import httpx
 
+from eeg_bewegungsdaten import display
 from eeg_bewegungsdaten._version import __version__
 from eeg_bewegungsdaten.download import (
     ChecksumError,
     DownloadError,
+    archive_path,
     archived_files,
     download,
+    read_meta,
     verify,
 )
 from eeg_bewegungsdaten.export import ExportError, export
 from eeg_bewegungsdaten.http import new_client
 from eeg_bewegungsdaten.ingest import ingest, latest_uploads
-from eeg_bewegungsdaten.links import UENB, find_links
+from eeg_bewegungsdaten.links import UENB, DownloadLink, find_links
 from eeg_bewegungsdaten.mastr import (
     MastrError,
     clean_files,
@@ -38,14 +40,18 @@ log = logging.getLogger("eeg_bewegungsdaten")
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    args.console = display.console()
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(message)s",
-        stream=sys.stderr,
+        handlers=[display.log_handler(args.console)],
     )
     if not args.verbose:
         logging.getLogger("httpx").setLevel(logging.WARNING)
-    result: int = args.func(args)
+    try:
+        result: int = args.func(args)
+    except KeyboardInterrupt:
+        log.error("Interrupted")
+        return 130
     return result
 
 
@@ -141,17 +147,26 @@ def _download(args: argparse.Namespace) -> int:
         if not any(link.kind == "bewegungsdaten" for link in links):
             log.error("No known data files match --year/--uenb")
             return 1
-        failed = 0
-        for link in links:
-            log.info("%s %s: %s", link.year or "-", link.uenb or link.kind, link.url)
-            try:
-                result = download(link, data_dir, client)
-            except (httpx.HTTPError, DownloadError) as e:
-                failed += 1
-                log.error("%s", e)
-                continue
-            print(f"{result.meta['sha256']}  {result.path}")
-    return 1 if failed else 0
+        archived = {link.url for link in links if _is_archived(data_dir, link)}
+        with display.DownloadDisplay(
+            args.console, links, archived, data_dir, verbose=args.verbose
+        ) as shown:
+            for link in links:
+                log.debug("%s %s: %s", link.year or "-", link.uenb or link.kind, link.url)
+                try:
+                    result = download(link, data_dir, client, progress=shown.start(link))
+                except (httpx.HTTPError, DownloadError) as e:
+                    shown.failed(link, e)
+                else:
+                    shown.finished(link, result)
+    return 1 if shown.failures else 0
+
+
+def _is_archived(data_dir: Path, link: DownloadLink) -> bool:
+    try:
+        return read_meta(archive_path(data_dir, link)) is not None
+    except DownloadError:
+        return False
 
 
 def _ingest(args: argparse.Namespace) -> int:

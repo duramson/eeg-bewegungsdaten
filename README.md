@@ -91,6 +91,10 @@ uv run eeg-bewegungsdaten verify
   the tool does not know yet, `links` and `download` warn: its files may come in a new format.
 - `download` archives every data file and the legends: about 170 MB for 2025, 1 GB for all
   years. Files already in the archive are skipped; if one file fails, the others still load.
+  On a terminal it shows the running file with its progress, the next files in the queue and a
+  summary that updates during the run; each finished file prints a line with size, time,
+  average speed, source and the start of its SHA-256. `-v` adds the full SHA-256 and path.
+  Without a terminal, only these lines and the summary are printed, on stderr.
 - `ingest` reads the newest upload per year and TSO and writes the Parquet files. It takes
   about 15 seconds for 2025 and about two minutes for all years on a current laptop, with
   1.3 GB of memory at most. After an update of the tool, run it again for all years, so that every
