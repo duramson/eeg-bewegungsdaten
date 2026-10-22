@@ -8,11 +8,12 @@ server folder. On the CDN each part has its own id, so the folder is named after
 URLs of all parts.
 
 A file counts as downloaded only once its metadata file exists. Data arrive in a ``.part`` file
-that is renamed after the size and the ZIP structure have been checked, so an aborted download
-never looks finished.
+that is renamed after the size and the structure (ZIP, or the header line of a bare CSV) have
+been checked, so an aborted download never looks finished.
 
 When the server answers 404 for a file with a Wayback copy (`DownloadLink.fallback_url`), the
 copy is downloaded instead, into the same place. It must have the SHA-256 recorded in the link.
+So must a file whose `url` is a Wayback copy without a fallback (the files before 2016).
 """
 
 from __future__ import annotations
@@ -133,8 +134,11 @@ def download(
 
 
 def _fetch_or_fall_back(http: httpx.Client, link: DownloadLink, path: Path) -> dict[str, Any]:
+    # The recorded SHA-256 guards the Wayback copy: the fallback, or `url` itself when it is the
+    # only copy. A file on the server is archived as the server sends it.
+    only_copy = link.fallback_url is None
     try:
-        return _fetch(http, link, path, link.url)
+        return _fetch(http, link, path, link.url, sha256=link.sha256 if only_copy else None)
     except httpx.HTTPStatusError as e:
         if e.response.status_code != 404 or link.fallback_url is None:
             raise
@@ -169,7 +173,10 @@ def _fetch(
             source_url = str(response.url)
         if sha256 is not None and digest.hexdigest() != sha256:
             raise DownloadError(f"{url}: SHA-256 {digest.hexdigest()}, expected {sha256}")
-        _check_zip(part, url)
+        if link.filename.lower().endswith(".csv"):
+            _check_csv(part, url)
+        else:
+            _check_zip(part, url)
         part.replace(path)
     finally:
         part.unlink(missing_ok=True)
@@ -207,6 +214,15 @@ def _check_zip(path: Path, url: str) -> None:
         raise DownloadError(f"{url}: not a ZIP file ({e})") from e
     if broken is not None:
         raise DownloadError(f"{url}: CRC error in {broken}")
+
+
+def _check_csv(path: Path, url: str) -> None:
+    """50Hertz 2014 and 2015 are bare CSV files. The first line must be a header with
+    separators; an HTML error page has none."""
+    with path.open("rb") as f:
+        first = f.readline(1 << 16)
+    if first.removeprefix(b"\xef\xbb\xbf").lstrip().startswith(b"<") or b";" not in first:
+        raise DownloadError(f"{url}: not a CSV file")
 
 
 def archived_files(data_dir: Path, *, include_incomplete: bool = False) -> list[ArchivedFile]:
