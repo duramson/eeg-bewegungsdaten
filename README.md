@@ -53,8 +53,11 @@ The page only lists the latest year. The tool knows where the earlier files are 
   50Hertz 2014 and 2015 (`EARLIER_FILES`). Their names do not tell TSO and year, so the catalog
   gives both, and `download` rejects a copy whose SHA-256 differs from the recorded one. 50Hertz
   published 2014 and 2015 as a bare CSV file instead of a ZIP. TenneT 2012 has no column for
-  the avoided grid fees; its `vNNe` rows hold them as negative payments. No file of TransnetBW,
-  of 50Hertz before 2014 or of Amprion for 2012, 2014 and 2015 was found.
+  the avoided grid fees; its `vNNe` rows hold them as negative payments. The Wayback Machine has
+  no file of TransnetBW, of 50Hertz before 2014 or of Amprion for 2012, 2014 and 2015. Copies of
+  them, and of all four TSOs back to 2007, are in the dataset
+  [German Renewable Energy Payment Register](https://doi.org/10.5281/zenodo.8010410) on Zenodo
+  (CC BY 4.0), which the tool does not read yet.
 
 `OLDER_FILES` also lists the files of 2025, the year on the page in October 2026. The tool takes
 them from the page as long as it lists them, and from `OLDER_FILES` once the page moves on to
