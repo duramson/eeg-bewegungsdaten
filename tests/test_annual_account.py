@@ -1,9 +1,11 @@
-"""Sums of the real files of 2023 to 2025 against the EEG-Jahresabrechnung. Skipped unless pytest
-runs with --realdata.
+"""Sums of the real files of 2023 to 2025, and of the files before 2016, against the
+EEG-Jahresabrechnung. Skipped unless pytest runs with --realdata.
 
 The official figures are the column "gesamt" of the tables "Einspeisevergütungen in Euro",
 "Marktprämie in Euro" and "Strommengen in der sonstigen Direktvermarktung in kWh" in the
-EEG-Jahresabrechnung of each year on netztransparenz.de, read on 18 October 2026.
+EEG-Jahresabrechnung of each year on netztransparenz.de, read on 18 October 2026. For the years
+before 2016 they come from the copies of the accounts in the Wayback Machine (see
+docs/findings.md), read on 22 October 2026.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from pathlib import Path
 import polars as pl
 import pytest
 
+from eeg_bewegungsdaten.download import ArchivedFile
 from eeg_bewegungsdaten.ingest import ingest, latest_uploads
 from eeg_bewegungsdaten.paths import default_data_dir
 from tests.test_realdata import EXPECTED
@@ -33,10 +36,39 @@ OFFICIAL: dict[tuple[int, str], tuple[str, str, str]] = {
     (2025, "transnetbw"): ("1.618.941.836,82", "555.361.727,34", "1.157.473.564"),
 }
 
+# (year, TSO): the "gesamt" columns of the payment tables of the year (feed-in tariff; from 2012
+# also market premium and flexibility premium) in euros, and the avoided grid fees in euros. The
+# files before 2016 have no Veraeusserungsform, so all payments are compared at once. No account
+# of 2013 is online, so the files of that year cannot be checked.
+OFFICIAL_BEFORE_2016: dict[tuple[int, str], tuple[tuple[str, ...], str]] = {
+    (2011, "amprion"): (("3.490.580.815,11",), "72.619.864,64"),
+    (2011, "tennet"): (("7.448.754.005,32",), "148.996.087,49"),
+    (2012, "tennet"): (("6.990.850.311,17", "1.509.549.039,46"), "233.622.813,37"),
+    (2014, "50hertz"): (
+        ("2.030.406.066,55", "2.937.385.789,18", "3.699.036,38"),
+        "240.253.463,96",
+    ),
+    (2014, "tennet"): (
+        ("5.683.541.602,29", "3.705.518.273,83", "9.736.496,45"),
+        "307.331.896,76",
+    ),
+    (2015, "50hertz"): (
+        ("2.021.424.234,32", "3.643.053.326,44", "6.529.123,40"),
+        "266.489.503,53",
+    ),
+    (2015, "tennet"): (
+        ("5.484.527.333,76", "5.510.420.157,60", "23.309.573,61"),
+        "325.180.591,05",
+    ),
+}
 
-@pytest.mark.realdata
-@pytest.mark.parametrize(("jahr", "uenb"), sorted(OFFICIAL), ids=str)
-def test_sums_match_the_annual_account(jahr: int, uenb: str, tmp_path: Path) -> None:
+
+def euros(value: str) -> float:
+    return float(value.replace(".", "").replace(",", "."))
+
+
+def upload_of(jahr: int, uenb: str) -> list[ArchivedFile]:
+    """The archived upload with the SHA-256 of `EXPECTED`, or skip the test."""
     uploads = [
         files
         for files in latest_uploads(default_data_dir())
@@ -44,8 +76,13 @@ def test_sums_match_the_annual_account(jahr: int, uenb: str, tmp_path: Path) -> 
     ]
     if not uploads or tuple(f.meta["sha256"] for f in uploads[0]) != EXPECTED[(jahr, uenb)][0]:
         pytest.skip(f"{jahr} file of {uenb} not downloaded or changed upstream")
+    return uploads[0]
 
-    report = ingest(uploads[0], tmp_path)
+
+@pytest.mark.realdata
+@pytest.mark.parametrize(("jahr", "uenb"), sorted(OFFICIAL), ids=str)
+def test_sums_match_the_annual_account(jahr: int, uenb: str, tmp_path: Path) -> None:
+    report = ingest(upload_of(jahr, uenb), tmp_path)
     columns = ["veraeusserungsform", "sonderzeile", "strommenge", "eeg_zahlung"]
     rows = pl.read_parquet(report["outputs"]["clean"], columns=columns)
     form = pl.col("veraeusserungsform")
@@ -59,5 +96,26 @@ def test_sums_match_the_annual_account(jahr: int, uenb: str, tmp_path: Path) -> 
         rows.filter(form == 2)["eeg_zahlung"].sum(),
         rows.filter(special == "OTHER_DIRECT_MARKETING")["strommenge"].sum(),
     ]
-    official = [float(v.replace(".", "").replace(",", ".")) for v in OFFICIAL[(jahr, uenb)]]
+    official = [euros(v) for v in OFFICIAL[(jahr, uenb)]]
     assert sums == pytest.approx(official, rel=1e-4)
+
+
+@pytest.mark.realdata
+@pytest.mark.parametrize(("jahr", "uenb"), sorted(OFFICIAL_BEFORE_2016), ids=str)
+def test_sums_before_2016_match_the_annual_account(jahr: int, uenb: str, tmp_path: Path) -> None:
+    report = ingest(upload_of(jahr, uenb), tmp_path)
+    payments, avoided_fees = OFFICIAL_BEFORE_2016[(jahr, uenb)]
+
+    if (jahr, uenb) == (2012, "tennet"):
+        # The file has no column for the avoided grid fees: its vNNe rows hold them as negative
+        # payments.
+        columns = ["verguetungskategorie", "eeg_zahlung"]
+        rows = pl.read_parquet(report["outputs"]["clean"], columns=columns)
+        fee_rows = rows.filter(pl.col("verguetungskategorie").str.contains("-vNNe-"))
+        fees = -float(fee_rows["eeg_zahlung"].sum())
+        sums = [float(rows["eeg_zahlung"].sum()) + fees, fees]
+    else:
+        sums_clean = report["sums_clean"]
+        sums = [sums_clean["eeg_zahlung"], sums_clean["vermiedene_netzentgelte"]]
+    assert sums[0] == pytest.approx(sum(euros(v) for v in payments), rel=1e-4)
+    assert sums[1] == pytest.approx(euros(avoided_fees), rel=5e-4)  # TenneT 2012: 0.04 % less

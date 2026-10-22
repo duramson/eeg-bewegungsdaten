@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from pathlib import Path
 
 import httpx
 import pytest
 
-from eeg_bewegungsdaten import cli
-from eeg_bewegungsdaten.links import PAGE_URL, older_links, parse_links
+from eeg_bewegungsdaten import cli, links
+from eeg_bewegungsdaten.links import EARLIER_FILES, PAGE_URL, older_links, parse_links
 from tests.builders import PAGE, zip_bytes
 
 # The older files that `find_links` adds to the page
@@ -17,10 +18,20 @@ OLDER = older_links(parse_links(PAGE))
 def serve_page(
     monkeypatch: pytest.MonkeyPatch, failing: Callable[[str], bool] = lambda url: False
 ) -> list[str]:
-    """Serve the fixture page and a tiny ZIP for every file link, or 429 for the `failing` ones;
-    return the list of requested URLs."""
+    """Serve the fixture page and a tiny ZIP or CSV for every file link, or 429 for the `failing`
+    ones; return the list of requested URLs."""
     seen: list[str] = []
-    body = zip_bytes({"a.csv": b"x\r\n"})
+    bodies = {".zip": zip_bytes({"a.csv": b"x\r\n"}), ".csv": b"a;b\r\n1;2\r\n"}
+
+    def body(url: str) -> bytes:
+        return bodies[".csv" if url.lower().endswith(".csv") else ".zip"]
+
+    # The files before 2016 must have their recorded SHA-256: record the hashes of the bodies.
+    monkeypatch.setattr(
+        links,
+        "EARLIER_FILES",
+        tuple((*entry[:5], hashlib.sha256(body(entry[3])).hexdigest()) for entry in EARLIER_FILES),
+    )
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
@@ -29,7 +40,7 @@ def serve_page(
             return httpx.Response(200, text=PAGE)
         if failing(url):
             return httpx.Response(429, text="slow down")
-        return httpx.Response(200, content=body)
+        return httpx.Response(200, content=body(url))
 
     def new_client() -> httpx.Client:
         return httpx.Client(transport=httpx.MockTransport(handler))
@@ -52,7 +63,8 @@ def test_links_prints_one_line_per_file(
     lines = capsys.readouterr().out.splitlines()
     assert len(lines) == 5 + len(OLDER)
     assert lines[0].split("\t")[:3] == ["2025", "50hertz", "2026-09-04"]
-    assert lines[5].split("\t")[:3] == ["2016", "50hertz", "2017-11-30"]
+    assert lines[5].split("\t")[:3] == ["2011", "amprion", "2012-07-31"]
+    assert lines[5 + len(EARLIER_FILES)].split("\t")[:3] == ["2016", "50hertz", "2017-11-30"]
 
 
 def test_download_filters_by_tso_and_keeps_the_legend(

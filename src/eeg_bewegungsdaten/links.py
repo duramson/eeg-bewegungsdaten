@@ -7,6 +7,9 @@ The page only lists the latest year. Older files are in `OLDER_FILES`: 2021 to 2
 on the server without a link, 2016 to 2020 only survive in the Wayback Machine. Where the Wayback
 Machine also has a copy of a 2021 to 2024 file, `download` falls back to it once the server
 answers 404. `OLDER_FILES` lists the latest year too, for the time after the page moves on.
+
+Before 2016 each TSO published on its own site. The files that the Wayback Machine still
+has are in `EARLIER_FILES`, with TSO and year spelled out, as their names do not tell them.
 """
 
 from __future__ import annotations
@@ -60,7 +63,8 @@ class DownloadLink:
     fallback_url: str | None = None
     """Copy in the Wayback Machine, downloaded instead when `url` answers 404."""
     sha256: str | None = None
-    """SHA-256 of the file as archived before; the copy at `fallback_url` must match it."""
+    """SHA-256 of the file as archived before. The copy at `fallback_url` must match it, or
+    `url` itself when that is the only copy (`EARLIER_FILES`)."""
     expected_parts: tuple[int, ...] = ()
     """All part numbers of this upload, from the page or the known file catalog."""
     part_urls: tuple[str, ...] = ()
@@ -402,6 +406,93 @@ OLDER_FILES: tuple[tuple[str, str] | tuple[str, str, str, str], ...] = (
     ),
 )
 
+# Files of the years before 2016, from the TSOs' own sites; only the Wayback Machine still has
+# them. Entries: (TSO, year, Wayback timestamp, URL on the TSO's site, Last-Modified date of the
+# file, SHA-256), checked on 22 October 2026. 50Hertz published 2014 and 2015 as a bare CSV. The
+# Amprion file without a year in its name holds 2011: Amprion's page of 2011 linked it, and its
+# sums match the EEG annual account of 2011.
+EARLIER_FILES: tuple[tuple[str, int, str, str, str, str], ...] = (
+    (
+        "amprion",
+        2011,
+        "20150820204932",
+        "http://www.amprion.net/sites/default/files/zip/Bewegungsdaten_Internet.zip",
+        "2012-07-31",
+        "062ceb3a1c6d122d51aa4e113ddb2d74479aabc9e54d36cd6648d69730decbb7",
+    ),
+    (
+        "tennet",
+        2011,
+        "20130326100131",
+        "http://www.tennettso.de/site/binaries/content/assets/eeg-kwk-g/eeg/eeg-daten/"
+        "csv-datei-bewegungsdaten-nach-eeg-kategorien-2011.zip",
+        "2012-09-06",
+        "2d136855331435cc066b9387881b5aab00ac7b11ea8903e0d68ec7a592fbf9d4",
+    ),
+    (
+        "tennet",
+        2012,
+        "20150423152946",
+        "http://www.tennet.eu/de/fileadmin/downloads/Kunden/"
+        "CSV-Datei_Bewegungsdaten__EEG-Kategorien_aus_EEG-Jahresmeldung_2012_.csv.zip",
+        "2014-09-19",
+        "edd993727c9fb808a43bca547961c3d364a3d5b638241f08a6436a07a782a183",
+    ),
+    (
+        "amprion",
+        2013,
+        "20160128161534",
+        "http://www.amprion.net/sites/default/files/Internet_Bewegungsdaten_VGT_DV_2013.zip",
+        "2014-07-25",
+        "ce69bac72aaddf8a0fae43b9e223a8b69b37e88bf5237cada52949954a3fadcb",
+    ),
+    (
+        "tennet",
+        2013,
+        "20220319125625",
+        "https://www.tennet.eu/fileadmin/user_upload/The_Electricity_Market/German_Market/"
+        "EEG-KWKG/assets_reports_balancing/TenneT_Bewegungsdaten_2013.zip",
+        "2020-02-06",
+        "5c304f8bba7c6587deb60910a2da8057e43b57335e9f47f3372691ba17fc0b55",
+    ),
+    (
+        "50hertz",
+        2014,
+        "20180201020739",
+        "http://www.50hertz.com/Portals/3/Content/Dokumente/EEG/Veroeffentlichung-EEG-Daten/"
+        "EEG-Jahresabrechnung/EEG_JEA_2014.csv",
+        "2016-02-18",
+        "d99f184455a6eedbcad186d63ac3361120cf3ea5dd79de22c15dabd5c9cde3fa",
+    ),
+    (
+        "tennet",
+        2014,
+        "20220319125638",
+        "https://www.tennet.eu/fileadmin/user_upload/The_Electricity_Market/German_Market/"
+        "EEG-KWKG/assets_reports_balancing/TenneT_Bewegungsdaten_2014.zip",
+        "2020-02-06",
+        "defe974361c81c62788a79288866a9fc4d3680e78f34d335958fd3581aae0eba",
+    ),
+    (
+        "50hertz",
+        2015,
+        "20171127035812",
+        "http://www.50hertz.com/Portals/3/Content/Dokumente/EEG/Veroeffentlichung-EEG-Daten/"
+        "50Hertz_Bewegungsdaten_2015%5B1%5D.csv",
+        "2016-07-29",
+        "4ccfafa9c85c9b80d653a22e4a3e88aa6df19b3c7fe6756f212bfd870ab09561",
+    ),
+    (
+        "tennet",
+        2015,
+        "20220319125615",
+        "https://www.tennet.eu/fileadmin/user_upload/The_Electricity_Market/German_Market/"
+        "EEG-KWKG/assets_reports_balancing/JM_2015_Bewegungsdaten.zip",
+        "2020-02-06",
+        "9cce08910cf6673d37a90adb046ec79db9da2dd6eac1cba690391b729fddac00",
+    ),
+)
+
 
 def newest_known_year() -> int:
     """The newest year in `OLDER_FILES`. Files of later years may come in a format that this
@@ -410,12 +501,12 @@ def newest_known_year() -> int:
 
 
 def older_links(listed: Iterable[DownloadLink] = ()) -> list[DownloadLink]:
-    """The files in `OLDER_FILES`, except those the page lists: data files of a (year, TSO) in
-    `listed`, and any file with the URL of a link in `listed`."""
+    """The files in `EARLIER_FILES` and `OLDER_FILES`, except those the page lists: data files
+    of a (year, TSO) in `listed`, and any file with the URL of a link in `listed`."""
     listed = list(listed)
     on_page = {(link.year, link.uenb) for link in listed if link.kind == "bewegungsdaten"}
     urls = {link.url for link in listed}
-    links = []
+    links = _earlier_links()
     for url, published, *copy in OLDER_FILES:
         link = classify(url, dt.date.fromisoformat(published))
         assert link is not None, url
@@ -429,6 +520,24 @@ def older_links(listed: Iterable[DownloadLink] = ()) -> list[DownloadLink]:
             )
         links.append(link)
     return _group_parts(links)
+
+
+def _earlier_links() -> list[DownloadLink]:
+    """The files before 2016; `classify` cannot read TSO and year from their names."""
+    return [
+        DownloadLink(
+            _WAYBACK_ID.format(timestamp) + url,
+            unquote(url.rsplit("/", 1)[-1]),
+            "bewegungsdaten",
+            uenb,
+            year,
+            None,
+            dt.date.fromisoformat(published),
+            listed=False,
+            sha256=sha256,
+        )
+        for uenb, year, timestamp, url, published, sha256 in EARLIER_FILES
+    ]
 
 
 def _group_parts(links: list[DownloadLink]) -> list[DownloadLink]:

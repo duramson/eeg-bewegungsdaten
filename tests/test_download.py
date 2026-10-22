@@ -20,7 +20,8 @@ from eeg_bewegungsdaten.download import (
     verify,
 )
 from eeg_bewegungsdaten.links import PAGE_URL, DownloadLink, find_links, older_links
-from tests.builders import PAGE, TENNET_PART, classified, zip_bytes
+from tests.builders import PAGE, TENNET_PART, classified, csv, zip_bytes
+from tests.old_formats import HEADER_50HERTZ_2014
 
 URL = (
     "https://www.netztransparenz.de/cdn/files/0687a707-cf7c-45c1-29cf-08defc51206b/"
@@ -29,11 +30,26 @@ URL = (
 
 
 ZIP = zip_bytes({"Bewegungsdaten/Teil1.csv": b"EEG_Mastr_Nr;Monat\r\nEEG900000000001;0\r\n"})
+CSV = csv(HEADER_50HERTZ_2014, "Netz GmbH;E40000000000001;SoK81a------01;8248;4175,14;0", bom=True)
 
 
 @pytest.fixture
 def link() -> DownloadLink:
     return classified(URL)
+
+
+def wayback_only(body: bytes, filename: str = "EEG_JEA_2014.csv") -> DownloadLink:
+    """A file before 2016, which only the Wayback Machine has: its SHA-256 is recorded."""
+    return DownloadLink(
+        "https://web.archive.org/web/20180201020739id_/http://www.50hertz.com/x/" + filename,
+        filename,
+        "bewegungsdaten",
+        "50hertz",
+        2014,
+        None,
+        listed=False,
+        sha256=hashlib.sha256(body).hexdigest(),
+    )
 
 
 class Server:
@@ -166,6 +182,41 @@ def test_corrupt_zip_is_not_archived(tmp_path: Path, link: DownloadLink) -> None
     server = serve(bytes(damaged))
 
     with server.client() as client, pytest.raises(DownloadError):
+        download(link, tmp_path, client)
+
+    assert leftovers(tmp_path) == []
+
+
+def test_bare_csv_is_archived_with_its_header_checked(tmp_path: Path) -> None:
+    server = serve(CSV)
+
+    with server.client() as client:
+        archived = download(wayback_only(CSV), tmp_path, client)
+
+    assert archived.path.name == "EEG_JEA_2014.csv"
+    assert archived.path.read_bytes() == CSV
+    assert archived.meta["sha256"] == hashlib.sha256(CSV).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "body", [b"<html>Wartungsarbeiten</html>", b"\xef\xbb\xbf<!DOCTYPE html>", b"x;y", b""]
+)
+def test_html_page_or_empty_file_is_not_archived_as_csv(tmp_path: Path, body: bytes) -> None:
+    server = serve(body if body != b"x;y" else b"a single line")
+
+    with server.client() as client, pytest.raises(DownloadError, match="not a CSV"):
+        download(wayback_only(server.respond(httpx.Request("GET", "x")).content), tmp_path, client)
+
+    assert leftovers(tmp_path) == []
+
+
+@pytest.mark.parametrize("filename", ["EEG_JEA_2014.csv", "Bewegungsdaten_Internet.zip"])
+def test_wayback_only_copy_must_have_the_recorded_sha256(tmp_path: Path, filename: str) -> None:
+    body = CSV if filename.endswith(".csv") else ZIP
+    server = serve(body)
+    link = dataclasses.replace(wayback_only(body, filename), sha256="0" * 64)
+
+    with server.client() as client, pytest.raises(DownloadError, match="SHA-256"):
         download(link, tmp_path, client)
 
     assert leftovers(tmp_path) == []

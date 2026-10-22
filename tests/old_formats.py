@@ -1,4 +1,4 @@
-"""Headers and lines in the layouts of 2016 to 2024, after the real files.
+"""Headers and lines in the layouts of 2011 to 2024, after the real files.
 
 The headers are copied from the files; all IDs and names in the lines are made up and only follow
 the shape of the real ones. Most files up to 2023 are cp1252 throughout, see `cp1252_csv`.
@@ -73,6 +73,23 @@ HEADER_TENNET_2023 = (
     '"EEG_Anlagenschlüssel";"EEG_Mastr_Nr";"NB_BNR";"NB_Mastr_Nr";"Netzbetreiber";'
     '"ÜNB_Mastr_Nr";"Vergütungskategorie";"Strommenge";"EEG_Zahlung";"Vermiedene_Netzentgelte";'
     '"Veräußerungsform";"Monat"'
+)
+
+# Before 2016, from the TSOs' own sites: one layout per file.
+HEADER_TENNET_2011 = "ÜNB;BNetzA-ID;Firma;Anlagenschlüssel;Kategorie;Einspeisung;Vergütung;vNNE"
+HEADER_TENNET_2012 = (
+    "Firma;Jahr;Anlagenschlüssel;Kategorie;Einsatzstoff Biomasse;Einspeisung [kWh];Vergütung [Euro]"
+)
+HEADER_TENNET_2013 = "BNetzA-ID;Firma;Anlagenschlüssel;Kategorie;Einspeisung;Vergütung;vNNE"
+HEADER_TENNET_2014 = "BNetzA-ID;Anlagenschlüssel;Kategorie;Einspeisung;Vergütung;vNNE"
+HEADER_AMPRION_2011 = (
+    "LFD_NR;ANLAGENSCHLUESSEL;STRASSE;PLZ;ORT;BUNDESLAND;VERGUETUNGSKATEGORIE;MENGE;EURO;vNe"
+)
+HEADER_AMPRION_2013 = "ANLAGENSCHLUESSEL;VERGUETUNGSKATEGORIE;MENGE [KWH];BETRAG [EURO]"
+HEADER_50HERTZ_2014 = "NETZBETREIBER;ANLAGENSCHLUESSEL;VERGUETUNGSKATEGORIE;KWH;VERGUETUNG;VNNE"
+HEADER_50HERTZ_2015 = (
+    "ROWNUM;BNETZANUMMER;NAME;ANLAGENSCHLUESSEL;EEG_VERGUETUNGSGRUPPE;PHYS [KWH];VERGÜTUNG [€];"
+    "VNNE [€]"
 )
 
 KEY = "E90000000000000000000000000000002"

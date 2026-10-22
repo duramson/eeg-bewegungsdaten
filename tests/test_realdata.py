@@ -1,4 +1,4 @@
-"""Row counts of the real files of 2016 to 2025. Skipped unless pytest runs with --realdata.
+"""Row counts of the real files of 2011 to 2025. Skipped unless pytest runs with --realdata.
 
 Needs `eeg-bewegungsdaten download` first. Raw line counts come from an independent count of the
 lines in the ZIPs (header and lines without any value left out). The quarantine codes, MONAT_EMPTY
@@ -15,11 +15,65 @@ import pytest
 
 from eeg_bewegungsdaten.download import ArchivedFile, archived_files
 from eeg_bewegungsdaten.ingest import ingest, latest_uploads
-from eeg_bewegungsdaten.links import UENB, newest_known_year
+from eeg_bewegungsdaten.links import UENB, newest_known_year, older_links
 from eeg_bewegungsdaten.paths import default_data_dir
 
 # (year, TSO): sha256 of the ZIPs in part order, raw lines, quarantine codes, qa_flags
 EXPECTED: dict[tuple[int, str], tuple[tuple[str, ...], int, dict[str, int], dict[str, int]]] = {
+    (2011, "amprion"): (
+        ("062ceb3a1c6d122d51aa4e113ddb2d74479aabc9e54d36cd6648d69730decbb7",),
+        801_547,
+        {"FIELD_COUNT": 8},
+        {"ENCODING_CP1252": 276_415},
+    ),
+    (2011, "tennet"): (
+        ("2d136855331435cc066b9387881b5aab00ac7b11ea8903e0d68ec7a592fbf9d4",),
+        1_226_229,
+        {},
+        {"ENCODING_CP1252": 110_880},
+    ),
+    (2012, "tennet"): (
+        ("edd993727c9fb808a43bca547961c3d364a3d5b638241f08a6436a07a782a183",),
+        1_620_764,
+        {},
+        {"ENCODING_CP1252": 178_113},
+    ),
+    (2013, "amprion"): (
+        ("ce69bac72aaddf8a0fae43b9e223a8b69b37e88bf5237cada52949954a3fadcb",),
+        826_698,
+        {},
+        {"ENCODING_CP1252": 298},
+    ),
+    (2013, "tennet"): (
+        ("5c304f8bba7c6587deb60910a2da8057e43b57335e9f47f3372691ba17fc0b55",),
+        1_828_808,
+        {},
+        {"ENCODING_CP1252": 108_734},
+    ),
+    (2014, "50hertz"): (
+        ("d99f184455a6eedbcad186d63ac3361120cf3ea5dd79de22c15dabd5c9cde3fa",),
+        567_565,
+        {},
+        {},
+    ),
+    (2014, "tennet"): (
+        ("defe974361c81c62788a79288866a9fc4d3680e78f34d335958fd3581aae0eba",),
+        1_947_532,
+        {},
+        {},
+    ),
+    (2015, "50hertz"): (
+        ("4ccfafa9c85c9b80d653a22e4a3e88aa6df19b3c7fe6756f212bfd870ab09561",),
+        614_756,
+        {"BAD_NUMBER": 1},
+        {"ENCODING_CP1252": 74_162},
+    ),
+    (2015, "tennet"): (
+        ("9cce08910cf6673d37a90adb046ec79db9da2dd6eac1cba690391b729fddac00",),
+        2_022_732,
+        {},
+        {"ENCODING_CP1252": 238_075},
+    ),
     (2016, "50hertz"): (
         ("b73a773dafa9373a87ccc1333f69790ed03d1d543b8eb51d19268ed786203450",),
         551_649,
@@ -415,7 +469,13 @@ def test_superseded_uploads_give_the_reference_counts(
     check_reference_counts(files, tmp_path, raw, quarantine, flags)
 
 
+def test_every_file_before_2016_has_reference_counts() -> None:
+    earlier = {(link.year, link.uenb) for link in older_links() if link.year and link.year < 2016}
+
+    assert {key for key in EXPECTED if key[0] < 2016} == earlier
+
+
 def test_every_year_and_tso_from_2016_has_reference_counts() -> None:
-    assert sorted(EXPECTED) == [
+    assert [key for key in sorted(EXPECTED) if key[0] >= 2016] == [
         (jahr, uenb) for jahr in range(2016, newest_known_year() + 1) for uenb in UENB
     ]

@@ -107,11 +107,15 @@ def archive(
     file_id: str = FILE_ID,
 ) -> ArchivedFile:
     """Put a hand-made ZIP into the archive through the real download code."""
-    body = zip_bytes(members)
     link = classified(
         f"https://www.netztransparenz.de/cdn/files/{file_id}/"
         f"{uenb}%20eeg-zahlungen%20bewegungsdaten%20{year}.zip"
     )
+    return archive_body(data_dir, link, zip_bytes(members))
+
+
+def archive_body(data_dir: Path, link: DownloadLink, body: bytes) -> ArchivedFile:
+    """Put `body` into the archive as the file of `link`, through the real download code."""
     transport = httpx.MockTransport(lambda request: httpx.Response(200, content=body))
     with httpx.Client(transport=transport) as client:
         return download(link, data_dir, client)
