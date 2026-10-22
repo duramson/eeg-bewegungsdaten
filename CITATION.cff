@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below. For the data, cite the sources named in sources.txt of the export."
+type: software
+title: "eeg-bewegungsdaten"
+abstract: "Download, archive and clean the EEG-Bewegungsdaten (per-plant EEG payments) of the four German TSOs and match them with the Marktstammdatenregister."
+authors:
+  - family-names: "Theesen"
+    given-names: "Cedrik"
+    alias: "@duramson"
+    orcid: "https://orcid.org/0009-0004-3160-0815"
+repository-code: "https://github.com/duramson/eeg-bewegungsdaten"
+license: AGPL-3.0-or-later
+keywords:
+  - energy
+  - renewables
+  - eeg
+  - erneuerbare-energien-gesetz
+  - netztransparenz
+  - marktstammdatenregister
+  - mastr
+  - open-data
