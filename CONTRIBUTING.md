@@ -32,6 +32,10 @@ ideas go into the [issue forms](https://github.com/duramson/eeg-bewegungsdaten/i
 - Downloaded data and generated outputs. Tests use small synthetic fixtures with made-up plant
   keys.
 - Changes the topic does not need: reformatting, renamings, updated dependencies.
+- MaStR data that change over time, such as capacity, location, operator or status, in `mastr`
+  or the export. They show the day of the MaStR export, not the payment year; see
+  [Matching with the Marktstammdatenregister](README.md#matching-with-the-marktstammdatenregister).
+  Analyses that need them join them in `analysis/`.
 
 ## AI tools
 
