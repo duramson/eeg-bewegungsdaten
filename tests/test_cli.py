@@ -39,6 +39,8 @@ def serve_page(
 
     monkeypatch.setattr(cli, "new_client", new_client)
     monkeypatch.setattr("eeg_bewegungsdaten.links.new_client", new_client)
+    # Retries of the failing files do not wait
+    monkeypatch.setattr("eeg_bewegungsdaten.download.time.sleep", lambda seconds: None)
     return seen
 
 

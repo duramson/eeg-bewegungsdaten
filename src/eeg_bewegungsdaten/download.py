@@ -9,7 +9,7 @@ URLs of all parts.
 
 A file counts as downloaded only once its metadata file exists. Data arrive in a ``.part`` file
 that is renamed after the size and the ZIP structure have been checked, so an aborted download
-never looks finished.
+never looks finished. A broken connection, a timeout, 429 and 5xx are tried again a few times.
 
 When the server answers 404 for a file with a Wayback copy (`DownloadLink.fallback_url`), the
 copy is downloaded instead, into the same place. It must have the SHA-256 recorded in the link.
@@ -17,12 +17,15 @@ copy is downloaded instead, into the same place. It must have the SHA-256 record
 
 from __future__ import annotations
 
+import datetime as dt
+import email.utils
 import hashlib
 import json
 import logging
 import os
 import time
 import zipfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -42,6 +45,12 @@ CHUNK_SIZE = 1 << 20
 #: Attempts to rename a finished download. On Windows a virus scanner or the search indexer may
 #: still hold the new file for a moment.
 RENAME_ATTEMPTS = 5
+#: Attempts per URL when the error may go away: the connection broke or timed out, or the server
+#: is busy. The Wayback Machine often answers 429 or 503.
+ATTEMPTS = 4
+RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
+#: Seconds to wait at most before the next attempt, also when `Retry-After` asks for longer
+MAX_WAIT = 60.0
 
 
 class DownloadError(RuntimeError):
@@ -146,12 +155,69 @@ def _fetch_or_fall_back(
     http: httpx.Client, link: DownloadLink, path: Path, progress: Progress | None
 ) -> dict[str, Any]:
     try:
-        return _fetch(http, link, path, link.url, progress=progress)
+        return _retrying(link.url, lambda: _fetch(http, link, path, link.url, progress=progress))
     except httpx.HTTPStatusError as e:
         if e.response.status_code != 404 or link.fallback_url is None:
             raise
     log.warning("%s answers 404, downloading the Wayback copy %s", link.url, link.fallback_url)
-    return _fetch(http, link, path, link.fallback_url, sha256=link.sha256, progress=progress)
+    fallback = link.fallback_url
+    return _retrying(
+        fallback,
+        lambda: _fetch(http, link, path, fallback, sha256=link.sha256, progress=progress),
+    )
+
+
+def _retrying(url: str, fetch: Callable[[], dict[str, Any]]) -> dict[str, Any]:
+    """`fetch()`, tried again up to `ATTEMPTS` times in all on errors that may go away."""
+    for attempt in range(1, ATTEMPTS + 1):
+        try:
+            return fetch()
+        except (httpx.TransportError, httpx.HTTPStatusError) as e:
+            wait = _wait_before_retry(e, attempt)
+            if wait is None or attempt == ATTEMPTS:
+                raise
+            cause = (
+                f"HTTP {e.response.status_code}"
+                if isinstance(e, httpx.HTTPStatusError)
+                else type(e).__name__
+            )
+            log.info(
+                "%s: %s, trying again in %.0f s (attempt %d of %d)",
+                url,
+                cause,
+                wait,
+                attempt + 1,
+                ATTEMPTS,
+            )
+            time.sleep(wait)
+    raise AssertionError("unreachable")
+
+
+def _wait_before_retry(error: httpx.HTTPError, attempt: int) -> float | None:
+    """Seconds to wait before the next attempt, or None if trying again cannot help: 1, 2, 4
+    seconds, or what `Retry-After` asks for, up to `MAX_WAIT`."""
+    if isinstance(error, httpx.HTTPStatusError):
+        if error.response.status_code not in RETRY_STATUS:
+            return None
+        asked = _retry_after(error.response.headers.get("Retry-After"))
+        if asked is not None:
+            return min(asked, MAX_WAIT)
+    return min(2.0 ** (attempt - 1), MAX_WAIT)
+
+
+def _retry_after(value: str | None) -> float | None:
+    """`Retry-After` in seconds: a number of seconds or an HTTP date."""
+    if value is None:
+        return None
+    if value.strip().isdigit():
+        return float(value)
+    try:
+        when = email.utils.parsedate_to_datetime(value)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        return None
+    return max((when - dt.datetime.now(dt.timezone.utc)).total_seconds(), 0.0)
 
 
 def _fetch(

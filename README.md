@@ -91,7 +91,9 @@ uv run eeg-bewegungsdaten verify
   the tool does not know yet, `links` and `download` warn: its files may come in a new format.
 - `download` archives every data file and the legends: about 170 MB for 2025, 1 GB for all
   years. Files already in the archive are skipped; if one file fails, the others still load.
-  A full disk stops the run.
+  A broken connection, a timeout or a busy server (429, 5xx) is tried up to four times per
+  file, after 1, 2 and 4 seconds or what `Retry-After` asks for (at most a minute). A full disk
+  stops the run.
   On a terminal it shows the running file with its progress, the next files in the queue and a
   summary that updates during the run; each finished file prints a line with size, time,
   average speed, source and the start of its SHA-256. `-v` adds the full SHA-256 and path.
