@@ -35,6 +35,7 @@ from rich.theme import Theme
 
 from eeg_bewegungsdaten.download import ArchivedFile
 from eeg_bewegungsdaten.links import DownloadLink
+from eeg_bewegungsdaten.mastr import HITS
 from eeg_bewegungsdaten.progress import Progress
 
 #: The colors of all output, by role: one accent, muted states, graphite for the rest. Text
@@ -230,6 +231,13 @@ class RunDisplay:
         """Text instead of speed and time left, e.g. for a phase that has no progress."""
         return None
 
+    #: False for items that report nothing until they are done
+    live_progress = True
+
+    def amount_text(self, amount: int) -> str:
+        """An amount of work in the unit of the run; bytes by default."""
+        return decimal(amount)
+
     # Lines of single items
 
     def _name(self, item: Item) -> str:
@@ -262,10 +270,22 @@ class RunDisplay:
 
     def _running_row(self, item: Item, now: float) -> Table:
         """The bar of a running item; only on a terminal, so the width is known."""
+        if not self.live_progress:
+            # Nothing to count while it runs: a pulsing bar, the size and the time so far
+            bar = ProgressBar(width=28, pulse=True)
+            grid = Table.grid(padding=(0, 1))
+            grid.add_row(
+                item.spinner,
+                self._name(item),
+                bar,
+                Text(f"{self.amount_text(item.total or 0):>21}"),
+                Text(f"{_duration(now - item.started):>10}", "eeg.muted"),
+            )
+            return grid
         bar = ProgressBar(total=item.total, completed=item.amount, width=28, pulse=not item.total)
-        amount = decimal(item.amount)
+        amount = self.amount_text(item.amount)
         if item.total:
-            amount += f" / {decimal(item.total)}"
+            amount += f" / {self.amount_text(item.total)}"
         note = self.running_note(item)
         speed = item.speed(now)
         rate = f"{decimal(int(speed))}/s" if speed and note is None else ""
@@ -640,4 +660,252 @@ class IngestDisplay(RunDisplay):
     def final_lines(self) -> list[tuple[str, Text | str]]:
         return [
             ("Output", f"{self.data_dir}  (text, clean, quarantine, reports)"),
+        ]
+
+
+def _percent(share: float | None) -> str:
+    return "-" if share is None else f"{share:.1%}"
+
+
+def _euro(amount: float) -> str:
+    if abs(amount) >= 1e9:
+        return f"{amount / 1e9:,.1f} bn €"
+    return f"{amount / 1e6:,.1f} m €"
+
+
+class Step:
+    """A step before the items of a run, such as reading the MaStR: a spinner and a bar on a
+    terminal while it runs, then one line with what it found."""
+
+    def __init__(self, output: Console, label: str, unit: str) -> None:
+        self.output = output
+        self.label = label
+        self.unit = unit
+        self.symbols = _symbols(output)
+        self.cells: list[Text | str] = []
+        self._done = 0
+        self._total: int | None = None
+        self._started = time.monotonic()
+        self._spinner = Spinner("dots", style="eeg.accent")
+        self._live: Live | None = None
+
+    def progress(self, done: int, total: int | None) -> None:
+        self._done, self._total = done, total
+
+    def __rich__(self) -> RenderableType:
+        grid = Table.grid(padding=(0, 1))
+        count = f"{self._done}/{self._total} {self.unit}" if self._total else ""
+        grid.add_row(
+            self._spinner,
+            Text(f"{self.label:<16}"),
+            ProgressBar(total=self._total, completed=self._done, width=28, pulse=not self._total),
+            Text(f"{count:>14}"),
+            Text(f"{_duration(time.monotonic() - self._started):>8}", "eeg.muted"),
+        )
+        return grid
+
+    def __enter__(self) -> Step:
+        self.output.push_theme(THEME)
+        if self.output.is_terminal:
+            self._live = Live(self, console=self.output, refresh_per_second=8, transient=True)
+            self._live.start()
+        return self
+
+    def __exit__(
+        self,
+        kind: type[BaseException] | None,
+        error: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
+        if self._live is not None:
+            self._live.stop()
+        took = _took(time.monotonic() - self._started)
+        if kind is None:
+            line = Text.assemble((self.symbols.done, "eeg.ok"), f" {self.label:<16}")
+            for cell in (*self.cells, Text(took, "eeg.muted")):
+                line.append("  ")
+                line.append_text(cell if isinstance(cell, Text) else Text(cell))
+        else:
+            line = Text.assemble((self.symbols.failed, "eeg.error"), f" {self.label:<16}")
+        self.output.print(line)
+        self.output.pop_theme()
+
+
+@dataclass(frozen=True)
+class Clean:
+    """A clean file that `mastr` matches."""
+
+    year: int
+    uenb: str
+    rows: int
+
+    @property
+    def key(self) -> str:
+        return f"{self.year}/{self.uenb}"
+
+
+class MastrDisplay(RunDisplay):
+    """`mastr`: share of rows and payments matched, and what the bridge added, per clean file."""
+
+    noun = "Files"
+    states: ClassVar[dict[str, tuple[str, str]]] = {
+        **RunDisplay.states,
+        "done": ("matched", "eeg.ok"),
+    }
+    live_progress = False
+
+    def __init__(
+        self, output: Console, files: Sequence[Clean], data_dir: Path, *, verbose: bool = False
+    ) -> None:
+        items = [Item(f.key, f.year, f.uenb, total=f.rows) for f in files]
+        super().__init__(output, items, verbose=verbose)
+        self.data_dir = data_dir
+
+    def amount_text(self, amount: int) -> str:
+        return f"{amount:,} rows"
+
+    def header(self) -> Text:
+        rows = sum(item.total or 0 for item in self.items)
+        return Text.assemble(
+            ("Matching ", "eeg.heading"),
+            (f"{len(self.items)} clean files", "eeg.heading"),
+            f" ({rows:,} rows) with the Marktstammdatenregister",
+        )
+
+    def done_cells(self, item: Item) -> list[Text]:
+        report = item.result
+        rows = report["rows"]
+        bridge = report["treffer"]["ANLAGENSCHLUESSEL_BRUECKE"]["rows"]
+        not_found = report["treffer"]["NOT_FOUND"]["rows"]
+        rate = report["trefferquote"]
+        added = Text(
+            f"{'+' + format(bridge, ','):>8} bridge", "eeg.accent" if bridge else "eeg.muted"
+        )
+        if bridge and rows:
+            share = bridge / rows
+            added.append(f" {share:5.1%}" if share >= 0.001 else " <0.1%", "eeg.muted")
+        else:
+            added.append(" " * 6)
+        return [
+            Text(f"{rows:>9,} rows"),
+            Text(f"{_percent(rate['rows']):>6} matched"),
+            Text(f"{_percent(rate['eeg_zahlung']):>6} of payments"),
+            added,
+            Text(f"{not_found:>7,} not found", "eeg.warn" if not_found else "eeg.muted"),
+            Text(f"{_took(item.seconds):>6}", "eeg.muted"),
+        ]
+
+    def summary_lines(self, now: float, final: bool) -> list[tuple[str, Text | str]]:
+        s = self.symbols.separator
+        reports = [i.result for i in self.items if i.state == "done"]
+        rows = sum(r["rows"] for r in reports)
+        matched = sum(sum(r["treffer"][c]["rows"] for c in HITS) for r in reports)
+        paid = sum(sum(v["eeg_zahlung"] for v in r["treffer"].values()) for r in reports)
+        paid_matched = sum(sum(r["treffer"][c]["eeg_zahlung"] for c in HITS) for r in reports)
+        line = Text(f"{rows:,}")
+        if rows:
+            line.append(f"{s}{matched / rows:.1%} matched")
+        if paid:
+            line.append(f"{s}{paid_matched / paid:.1%} of payments")
+        bridge_rows = sum(r["treffer"]["ANLAGENSCHLUESSEL_BRUECKE"]["rows"] for r in reports)
+        bridge_paid = sum(r["treffer"]["ANLAGENSCHLUESSEL_BRUECKE"]["eeg_zahlung"] for r in reports)
+        bridge = Text(f"+{bridge_rows:,} rows", "eeg.accent" if bridge_rows else "")
+        if rows:
+            bridge.append(f" ({bridge_rows / rows:.1%}){s}{_euro(bridge_paid)}")
+        by_year: dict[int, list[int]] = {}
+        for r in reports:
+            year = by_year.setdefault(int(r["jahr"]), [0, 0])
+            year[0] += r["treffer"]["ANLAGENSCHLUESSEL_BRUECKE"]["rows"]
+            year[1] += r["rows"]
+        shares = [(y, b / n) for y, (b, n) in sorted(by_year.items()) if n and b / n >= 0.005]
+        if shares:
+            bridge.append(s)
+            bridge.append(", ".join(f"{y} +{share:.1%}" for y, share in shares), "eeg.muted")
+        return [("Rows", line), ("Bridge", bridge)]
+
+    def final_lines(self) -> list[tuple[str, Text | str]]:
+        return [("Output", f"{self.data_dir / 'mastr'}  (and reports/*/*.mastr.json)")]
+
+
+@dataclass(frozen=True)
+class ExportYear:
+    """One year of the export and the clean files (one per TSO) it combines."""
+
+    year: int
+    uenbs: list[str]
+
+    @property
+    def key(self) -> str:
+        return str(self.year)
+
+
+class ExportDisplay(RunDisplay):
+    """`export`: rows, plants, rows without plant key, share matched and file size per year."""
+
+    noun = "Years"
+    states: ClassVar[dict[str, tuple[str, str]]] = {
+        **RunDisplay.states,
+        "done": ("written", "eeg.ok"),
+    }
+
+    def __init__(
+        self, output: Console, years: Sequence[ExportYear], out_dir: Path, *, verbose: bool = False
+    ) -> None:
+        items = [
+            Item(
+                y.key, y.year, f"{len(y.uenbs)} TSO" + "s" * (len(y.uenbs) != 1), total=len(y.uenbs)
+            )
+            for y in years
+        ]
+        super().__init__(output, items, verbose=verbose)
+        self.out_dir = out_dir
+
+    def amount_text(self, amount: int) -> str:
+        return str(amount)
+
+    def running_note(self, item: Item) -> str | None:
+        if item.total and item.amount >= item.total:
+            return "merging the TSOs into one file"
+        return "TSOs written"
+
+    def header(self) -> Text:
+        return Text.assemble(
+            ("Exporting ", "eeg.heading"),
+            (f"{len(self.items)} years", "eeg.heading"),
+            f" to {self.out_dir}",
+        )
+
+    def done_cells(self, item: Item) -> list[Text]:
+        summary = item.result
+        size = (self.out_dir / summary["file"]).stat().st_size
+        without = summary["rows_without_anlage_id"]
+        return [
+            Text(f"{summary['rows']:>10,} rows"),
+            Text(f"{summary['anlage_ids']:>10,} plants"),
+            Text(
+                f"{without:>8,} without key",
+                "eeg.warn" if without else "eeg.muted",
+            ),
+            Text(f"{_percent(summary['trefferquote']):>6} matched"),
+            Text(f"{decimal(size):>9}"),
+            Text(f"{_took(item.seconds):>6}", "eeg.muted"),
+            Text(summary["file"], "eeg.muted"),
+        ]
+
+    def summary_lines(self, now: float, final: bool) -> list[tuple[str, Text | str]]:
+        s = self.symbols.separator
+        summaries = [i.result for i in self.items if i.state == "done"]
+        rows = sum(x["rows"] for x in summaries)
+        without = sum(x["rows_without_anlage_id"] for x in summaries)
+        line = Text(f"{rows:,} rows{s}")
+        line.append(f"{without:,} without plant key", "eeg.warn" if without else "")
+        return [("Rows", line)]
+
+    def final_lines(self) -> list[tuple[str, Text | str]]:
+        return [
+            ("Output", f"{self.out_dir}  (one Parquet file per year, sources.txt, sources.json)"),
+            (
+                "Note",
+                Text("anlage_id.parquet stays in the data folder: never share it", "eeg.warn"),
+            ),
         ]

@@ -7,8 +7,11 @@ import logging
 import zipfile
 from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 import httpx
+import polars as pl
+from rich.text import Text
 
 from eeg_bewegungsdaten import display
 from eeg_bewegungsdaten._version import __version__
@@ -34,7 +37,7 @@ from eeg_bewegungsdaten.mastr import (
     load_bridge,
     load_register,
 )
-from eeg_bewegungsdaten.paths import ENV_VAR, default_data_dir, export_dir
+from eeg_bewegungsdaten.paths import ENV_VAR, default_data_dir, export_dir, output_paths
 from eeg_bewegungsdaten.reader import data_size
 from eeg_bewegungsdaten.schema import FormatError
 
@@ -219,8 +222,18 @@ def _mastr(args: argparse.Namespace) -> int:
     if not files:
         log.error("No matching clean files in %s; run 'ingest' first", data_dir)
         return 1
+    db_path = args.db.expanduser() if args.db else default_db_path()
     try:
-        register = load_register(args.db.expanduser() if args.db else default_db_path())
+        with display.Step(args.console, "MaStR register", "tables") as step:
+            register = load_register(db_path, progress=step.progress)
+            tables = register.source["tables"]
+            dates = sorted({d for t in tables.values() for d in t["datum_download"]})
+            step.cells = [
+                f"{len(tables)} tables",
+                f"{sum(t['rows'] for t in tables.values()):,} rows",
+                f"export of {', '.join(_iso_day(d) for d in dates) or 'unknown date'}",
+                Text(str(db_path), "eeg.muted"),
+            ]
     except MastrError as e:
         log.error("%s", e)
         return 1
@@ -234,52 +247,85 @@ def _mastr(args: argparse.Namespace) -> int:
         # open-MaStR can fail on single files and still report success.
         log.warning("Empty MaStR tables, check the open-MaStR log: %s", ", ".join(empty))
     # From all clean files, also those not selected.
-    bridge = load_bridge(data_dir, register)
-    years = bridge.source["years"]
-    log.info(
-        "Bridge from the rows matched by number%s: %s Anlagenschluessel of one EEG plant, "
-        "%s of several (not used)",
-        f" of {years[0]} to {years[-1]}" if years else "",
-        f"{bridge.source['keys']:,}",
-        f"{bridge.source['keys_with_several_plants']:,}",
-    )
+    with display.Step(args.console, "Bridge", "files") as step:
+        bridge = load_bridge(data_dir, register, progress=step.progress)
+        years = bridge.source["years"]
+        step.cells = [
+            f"{bridge.source['keys']:,} Anlagenschluessel of one EEG plant",
+            Text(
+                f"{bridge.source['keys_with_several_plants']:,} of several, not used", "eeg.muted"
+            ),
+            _from_years(years),
+        ]
 
-    print(f"{'jahr':<6}{'uenb':<12}{'rows':>11}{'treffer':>9}{'zahlung':>9}  codes")
-    for jahr, uenb in files:
-        report = link_file(data_dir, jahr, uenb, register, bridge)
-        rate = report["trefferquote"]
-        codes = ", ".join(
-            f"{code} {n['rows']:,}" for code, n in report["treffer"].items() if n["rows"]
-        )
-        print(
-            f"{jahr:<6}{uenb:<12}{report['rows']:>11,}"
-            f"{_percent(rate['rows']):>9}{_percent(rate['eeg_zahlung']):>9}  {codes}"
-        )
+    cleans = [
+        display.Clean(jahr, uenb, _rows(output_paths(data_dir, jahr, uenb).clean))
+        for jahr, uenb in files
+    ]
+    with display.MastrDisplay(args.console, cleans, data_dir, verbose=args.verbose) as shown:
+        for clean in cleans:
+            shown.start(clean.key)
+            report = link_file(data_dir, clean.year, clean.uenb, register, bridge)
+            shown.finish(clean.key, report, size=clean.rows)
+            if args.verbose:
+                codes = ", ".join(
+                    f"{code} {n['rows']:,}" for code, n in report["treffer"].items() if n["rows"]
+                )
+                args.console.print(Text(f"  {codes}", "eeg.muted"))
     return 0
+
+
+def _from_years(years: Sequence[int]) -> str:
+    if not years:
+        return ""
+    span = str(years[0]) if years[0] == years[-1] else f"{years[0]} to {years[-1]}"
+    return f"from the rows matched by number of {span}"
+
+
+def _rows(path: Path) -> int:
+    """Rows of a Parquet file, from its metadata."""
+    return int(pl.scan_parquet(path).select(pl.len()).collect().item())
+
+
+def _iso_day(value: str) -> str:
+    """20261021 as 2026-10-21"""
+    return f"{value[:4]}-{value[4:6]}-{value[6:8]}" if len(value) == 8 else value
 
 
 def _export(args: argparse.Namespace) -> int:
     data_dir = _data_dir(args)
     out_dir = args.out.expanduser() if args.out else export_dir(data_dir)
+    by_year: dict[int, list[str]] = {}
+    for jahr, uenb in clean_files(data_dir):
+        if not args.year or jahr in args.year:
+            by_year.setdefault(jahr, []).append(uenb)
+    years = [display.ExportYear(jahr, uenbs) for jahr, uenbs in by_year.items()]
+    if not years:
+        log.error("No matching clean files in %s; run 'ingest' first", data_dir)
+        return 1
+    offsets = [sum(len(y.uenbs) for y in years[:i]) for i in range(len(years))]
     try:
-        sources = export(data_dir, out_dir, args.year)
+        with display.ExportDisplay(args.console, years, out_dir, verbose=args.verbose) as shown:
+            current = [0]
+            moves = [shown.start(years[0].key)]
+
+            def progress(done: int, total: int | None) -> None:
+                i = current[0]
+                if i < len(years):
+                    moves[0](min(done - offsets[i], len(years[i].uenbs)), len(years[i].uenbs))
+
+            def on_year(jahr: int, summary: dict[str, Any]) -> None:
+                i = current[0]
+                shown.finish(years[i].key, summary, size=len(years[i].uenbs))
+                current[0] = i + 1
+                if i + 1 < len(years):
+                    moves[0] = shown.start(years[i + 1].key)
+
+            export(data_dir, out_dir, args.year, progress=progress, on_year=on_year)
     except ExportError as e:
         log.error("%s", e)
         return 1
-    print(f"{'jahr':<6}{'rows':>12}{'anlage_id':>11}{'ohne_id':>10}{'treffer':>9}  file")
-    for jahr, summary in sources["years"].items():
-        print(
-            f"{jahr:<6}{summary['rows']:>12,}{summary['anlage_ids']:>11,}"
-            f"{summary['rows_without_anlage_id']:>10,}{_percent(summary['trefferquote']):>9}  "
-            f"{out_dir / summary['file']}"
-        )
-    total = sum(summary["rows"] for summary in sources["years"].values())
-    print(f"{'total':<6}{total:>12,}")
     return 0
-
-
-def _percent(share: float | None) -> str:
-    return "-" if share is None else f"{share:.1%}"
 
 
 def _verify(args: argparse.Namespace) -> int:

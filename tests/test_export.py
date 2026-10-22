@@ -357,17 +357,36 @@ def test_export_refuses_a_match_report_without_clean_sha256(data_dir: Path) -> N
     assert not anlage_id_path(data_dir).exists()
 
 
+def test_export_reports_progress_and_each_year(data_dir: Path) -> None:
+    calls: list[tuple[int, int | None]] = []
+    years: list[int] = []
+
+    content = export(
+        data_dir,
+        progress=lambda done, total: calls.append((done, total)),
+        on_year=lambda jahr, summary: years.append(jahr),
+    )
+
+    assert calls[0] == (0, 4)
+    assert calls[-1] == (4, 4)
+    assert years == [2024, 2025]
+    assert [str(year) for year in years] == list(content["years"])
+
+
 def test_cli_export_prints_rows_per_year(
     data_dir: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert cli.main(["--data-dir", str(data_dir), "export"]) == 0
 
-    header, *lines, total = capsys.readouterr().out.splitlines()
-    assert header.split() == ["jahr", "rows", "anlage_id", "ohne_id", "treffer", "file"]
-    assert lines[0].split()[:5] == ["2024", "2", "2", "0", "50.0%"]
-    assert lines[1].split()[:5] == ["2025", "4", "2", "2", "75.0%"]
-    assert lines[1].endswith("eeg-bewegungsdaten-2025.parquet")
-    assert total.split() == ["total", "6"]
+    lines = capsys.readouterr().err.splitlines()
+    assert lines[0].startswith("Exporting 2 years to ")
+    first, second = lines[1:3]
+    assert first.split()[:9] == ["✓", "2024", "1", "TSO", "2", "rows", "2", "plants", "0"]
+    assert "50.0% matched" in first
+    assert second.split()[:9] == ["✓", "2025", "3", "TSOs", "4", "rows", "2", "plants", "2"]
+    assert "75.0% matched" in second
+    assert second.endswith("eeg-bewegungsdaten-2025.parquet")
+    assert "Rows     6 rows · 2 without plant key" in lines
 
 
 def test_cli_export_to_another_folder(data_dir: Path, tmp_path: Path) -> None:

@@ -367,7 +367,9 @@ uv run eeg-bewegungsdaten mastr
   `data/sqlite/open-mastr.db` in `$MASTR_PROJECT_HOME_DIR` or `~/.open-MaStR`. Give another
   file with `--db`.
 - The database is opened read-only. Databases written with `english=True` are not supported.
-- It prints the share of rows and of EEG payments that were matched, per year and TSO.
+- It prints the share of rows and of EEG payments that were matched, the rows that only the
+  bridge matched and the rows not found, per year and TSO. The summary adds them up and lists
+  the years in which the bridge matched at least 0.5 % of the rows.
 - For 2025 alone it takes about 2 minutes and 4.2 GB of memory, for 2016 to 2025 about 4
   minutes.
 

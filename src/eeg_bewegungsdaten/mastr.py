@@ -59,6 +59,7 @@ from eeg_bewegungsdaten.paths import (
     write_atomic,
     write_json,
 )
+from eeg_bewegungsdaten.progress import Progress
 
 log = logging.getLogger(__name__)
 
@@ -193,15 +194,18 @@ class Register:
     source: dict[str, Any]
 
 
-def load_register(db_path: Path) -> Register:
+def load_register(db_path: Path, *, progress: Progress | None = None) -> Register:
     """Read EEG plants and units of all energy sources from the open-MaStR database.
 
     Tables missing from the database are skipped and listed in `source`; at least one table of
-    EEG plants must exist.
+    EEG plants must exist. `progress` gets the tables read so far and their number.
     """
     if not db_path.is_file():
         raise MastrError(f"{db_path}: open-MaStR database not found")
-    log.info("Reading MaStR tables from %s", db_path)
+    log.debug("Reading MaStR tables from %s", db_path)
+    count = 2 * len(TABLES) + 1
+    if progress is not None:
+        progress(0, count)
 
     plants: list[pl.DataFrame] = []
     units: list[pl.DataFrame] = []
@@ -226,13 +230,16 @@ def load_register(db_path: Path) -> Register:
             name = next((n for n in (table, OLD_TABLE_NAMES[table]) if n in existing), None)
             if name is None:
                 missing.append(table)
-                return None
-            frame = _read(con, name, columns, where, optional or {})
-            tables[table] = {
-                "name": name,
-                "rows": frame.height,
-                "datum_download": _download_dates(con, name),
-            }
+                frame = None
+            else:
+                frame = _read(con, name, columns, where, optional or {})
+                tables[table] = {
+                    "name": name,
+                    "rows": frame.height,
+                    "datum_download": _download_dates(con, name),
+                }
+            if progress is not None:
+                progress(len(tables) + len(missing), count)
             return frame
 
         for energietraeger, (plant_table, unit_table) in TABLES.items():
@@ -303,16 +310,22 @@ def _bridge_keys(clean: pl.LazyFrame, register: Register) -> pl.DataFrame:
     )
 
 
-def load_bridge(data_dir: Path, register: Register) -> Bridge:
+def load_bridge(data_dir: Path, register: Register, *, progress: Progress | None = None) -> Bridge:
     """The bridge from all clean files in `data_dir`, whatever years are matched: a key counts
-    for one plant only if the rows of all years and TSOs name the same plant."""
+    for one plant only if the rows of all years and TSOs name the same plant. `progress` gets
+    the clean files read so far and their number."""
     parts: list[pl.DataFrame] = [pl.DataFrame(schema=BRIDGE_SCHEMA)]
     years: set[int] = set()
-    for jahr, uenb in clean_files(data_dir):
+    files = clean_files(data_dir)
+    for i, (jahr, uenb) in enumerate(files):
+        if progress is not None:
+            progress(i, len(files))
         keys = _bridge_keys(pl.scan_parquet(output_paths(data_dir, jahr, uenb).clean), register)
         if not keys.is_empty():
             years.add(jahr)
             parts.append(keys.select(BRIDGE_SCHEMA.names()))
+    if progress is not None:
+        progress(len(files), len(files))
     keys = _plants_per(pl.concat(parts).unique(), "anlagenschluessel")
     several = keys.filter(pl.col("plants") > 1).height
     source = {
