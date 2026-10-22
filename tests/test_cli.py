@@ -30,16 +30,20 @@ def serve_page(
     failing: Callable[[str], bool] = lambda url: False,
     *,
     recorded: bool = False,
+    page: httpx.Response | None = None,
 ) -> list[str]:
-    """Serve the fixture page and a tiny ZIP for every file link, or 429 for the `failing` ones;
-    return the list of requested URLs. The tiny ZIP has other bytes than the files recorded in
-    `OLDER_FILES`, so their SHA-256 is left out unless `recorded`."""
+    """Serve the fixture page (or `page` instead) and a tiny ZIP for every file link, or 429 for
+    the `failing` ones; return the list of requested URLs. The tiny ZIP has other bytes than the
+    files recorded in `OLDER_FILES`, so their SHA-256 is left out unless `recorded`."""
     if not recorded:
+        for name, find in (("find_links", find_links), ("older_links", older_links)):
 
-        def unrecorded(*args: Any, **kwargs: Any) -> list[DownloadLink]:
-            return [dataclasses.replace(link, sha256=None) for link in find_links(*args, **kwargs)]
+            def unrecorded(
+                *args: Any, find: Callable[..., list[DownloadLink]] = find, **kwargs: Any
+            ) -> list[DownloadLink]:
+                return [dataclasses.replace(link, sha256=None) for link in find(*args, **kwargs)]
 
-        monkeypatch.setattr("eeg_bewegungsdaten.cli.find_links", unrecorded)
+            monkeypatch.setattr(f"eeg_bewegungsdaten.cli.{name}", unrecorded)
     seen: list[str] = []
     body = zip_bytes({"a.csv": b"x\r\n"})
 
@@ -47,7 +51,7 @@ def serve_page(
         url = str(request.url)
         seen.append(url)
         if url == PAGE_URL:
-            return httpx.Response(200, text=PAGE)
+            return page or httpx.Response(200, text=PAGE)
         if failing(url):
             return httpx.Response(429, text="slow down")
         return httpx.Response(200, content=body)
@@ -76,6 +80,45 @@ def test_links_prints_one_line_per_file(
     assert len(lines) == 5 + len(OLDER)
     assert lines[0].split("\t")[:3] == ["2025", "50hertz", "2026-09-04"]
     assert lines[5].split("\t")[:3] == ["2016", "50hertz", "2017-11-30"]
+
+
+PAGE_DOWN = {
+    "503": httpx.Response(503, text="error"),
+    "no-links": httpx.Response(200, text="<html><body>Relaunch</body></html>"),
+}
+
+
+@pytest.mark.parametrize("page", PAGE_DOWN.values(), ids=PAGE_DOWN.keys())
+def test_links_without_the_page_prints_the_known_files(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+    page: httpx.Response,
+) -> None:
+    serve_page(monkeypatch, page=page)
+
+    assert cli.main(["links"]) == 1
+
+    assert len(capsys.readouterr().out.splitlines()) == len(older_links())
+    (message,) = caplog.messages
+    assert message.startswith(f"Cannot read {PAGE_URL} (")
+    assert message.endswith("); going on with the files this version knows")
+
+
+@pytest.mark.parametrize("page", PAGE_DOWN.values(), ids=PAGE_DOWN.keys())
+def test_download_without_the_page_takes_the_known_files(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+    page: httpx.Response,
+) -> None:
+    serve_page(monkeypatch, page=page)
+
+    assert cli.main(["--data-dir", str(tmp_path), "download", "--year", "2018"]) == 1
+
+    files = sorted(p.parent.parent.name for p in (tmp_path / "raw" / "2018").rglob("*.zip"))
+    assert files == ["50hertz", "amprion", "tennet", "transnetbw"]
+    assert len([m for m in caplog.messages if m.startswith("Cannot read ")]) == 1
 
 
 def test_download_filters_by_tso_and_keeps_the_legend(
