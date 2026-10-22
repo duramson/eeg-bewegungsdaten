@@ -226,7 +226,9 @@ def test_default_db_path_follows_open_mastr(
 ) -> None:
     monkeypatch.delenv("SQLITE_DATABASE_PATH", raising=False)
     monkeypatch.delenv("MASTR_PROJECT_HOME_DIR", raising=False)
+    # The home directory comes from HOME on POSIX and from USERPROFILE on Windows.
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     assert default_db_path() == tmp_path / ".open-MaStR" / "data" / "sqlite" / "open-mastr.db"
 
     monkeypatch.setenv("MASTR_PROJECT_HOME_DIR", str(tmp_path / "home"))
