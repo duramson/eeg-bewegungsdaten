@@ -12,4 +12,19 @@ data/
 *.parquet
 *.part
 
+# Files of personal tools and editors; see CONTRIBUTING.md
+AGENTS.md
+CLAUDE.md
+CLAUDE.local.md
+GEMINI.md
+.claude/
+.codex/
+.cursor/
+.cursorrules
+.gemini/
+.idea/
+.vscode/
+.windsurf/
+.windsurfrules
+
 .DS_Store
