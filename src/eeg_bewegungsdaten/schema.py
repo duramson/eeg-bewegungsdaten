@@ -19,45 +19,69 @@ UENB_MASTR_NR = {
 SOURCE_COLUMNS = {
     "eeg_mastr_nr": "eeg_mastr_nr",
     "eeg_anlagenschluessel": "anlagenschluessel",
-    "anlagenschluessel": "anlagenschluessel",  # 2016, Amprion 2017
+    "anlagenschluessel": "anlagenschluessel",  # 2011 to 2016, Amprion 2017
     "anlagennummer": "anlagenschluessel",  # 50Hertz 2016
     "nb_bnr": "nb_bnr",
     "netzbetreiber_betriebsnummer": "nb_bnr",  # TenneT and TransnetBW 2016, Amprion 2017
-    "bnetzanummer": "nb_bnr",  # 50Hertz 2016
+    "bnetzanummer": "nb_bnr",  # 50Hertz 2015 and 2016
+    "bnetza_id": "nb_bnr",  # TenneT 2011 and 2013 to 2015
     "nb_mastr_nr": "nb_mastr_nr",
     "netzbetreiber": "netzbetreiber",
     "netzbetreiber_name": "netzbetreiber",  # TransnetBW 2016, Amprion 2017
-    "name": "netzbetreiber",  # 50Hertz 2016
+    "name": "netzbetreiber",  # 50Hertz 2015 and 2016
+    "firma": "netzbetreiber",  # TenneT 2011 to 2013 and 2015
     "firma_netzbetreiber": "netzbetreiber",  # TransnetBW 2022
     "uenb_mastr_nr": "uenb_mastr_nr",
     "veraeusserungsform": "veraeusserungsform",
     "typ": "veraeusserungsform",  # Amprion 2018: EEG, DV, MSZ, AFV
     "verguetungskategorie": "verguetungskategorie",
-    "kategorie": "verguetungskategorie",  # TenneT and TransnetBW 2016, Amprion 2017
-    "eeg_verguetungsgruppe": "verguetungskategorie",  # 50Hertz 2016
+    "kategorie": "verguetungskategorie",  # TenneT 2011 to 2016, TransnetBW 2016, Amprion 2017
+    "eeg_verguetungsgruppe": "verguetungskategorie",  # 50Hertz 2015 and 2016
     "strommenge": "strommenge",
-    "einspeisung": "strommenge",  # TenneT 2016
-    "phys": "strommenge",  # 50Hertz 2016, "PHYS [KWH]"
+    "einspeisung": "strommenge",  # TenneT 2011 to 2016
+    "phys": "strommenge",  # 50Hertz 2015 and 2016, "PHYS [KWH]"
+    "kwh": "strommenge",  # 50Hertz 2014
+    "menge": "strommenge",  # Amprion 2011 and 2013, "MENGE [KWH]"
     "menge_kwh": "strommenge",  # Amprion 2016
     "jahresarbeit_kwh": "strommenge",  # Amprion 2017
     "in_eingespeiste_jahresarbeit": "strommenge",  # TransnetBW 2016
     "eeg_zahlung": "eeg_zahlung",
-    "verguetung": "eeg_zahlung",  # TenneT 2016
+    "verguetung": "eeg_zahlung",  # TenneT 2011 to 2016, 50Hertz 2014 and 2015
     "finz": "eeg_zahlung",  # 50Hertz 2016, "FINZ [€]"
+    "euro": "eeg_zahlung",  # Amprion 2011
+    "betrag": "eeg_zahlung",  # Amprion 2013, "BETRAG [EURO]"
     "betrag_euro": "eeg_zahlung",  # Amprion 2016
     "verguetung_euro": "eeg_zahlung",  # Amprion 2017
     "verguetung_fuer_in_abgenommene_eeg_einspeisung": "eeg_zahlung",  # TransnetBW 2016
     "eeg_einnahmen": "eeg_einnahmen",
     "vermiedene_netzentgelte": "vermiedene_netzentgelte",
-    "vnne": "vermiedene_netzentgelte",  # 50Hertz and TenneT 2016
+    "vnne": "vermiedene_netzentgelte",  # TenneT 2011 and 2013 to 2016, 50Hertz 2014 to 2016
+    "vne": "vermiedene_netzentgelte",  # Amprion 2011
     "vnne_euro": "vermiedene_netzentgelte",  # Amprion 2016 and 2017
     "vermiedene_netznutzungsentgelte": "vermiedene_netzentgelte",  # TransnetBW 2016
     "monat": "monat",
 }
 
-# Columns that are read but not kept: row numbers, the BDEW number of the TSO itself (Amprion
-# 2018 and 2019) and the Bemessungsleistung in Amprion's vNNE file of 2016.
-IGNORED_COLUMNS = frozenset({"id", "rownum", "zeilen_nr", "uenb_bnr", "bemessungsleistung_kw"})
+# Columns that are read but not kept: row numbers, the TSO itself (its name in TenneT 2011, its
+# BDEW number in Amprion 2018 and 2019), the year (TenneT 2012), the Bemessungsleistung in Amprion's
+# vNNE file of 2016, the biomass fuel in TenneT 2012 and the address of the plant in Amprion 2011.
+IGNORED_COLUMNS = frozenset(
+    {
+        "id",
+        "rownum",
+        "zeilen_nr",
+        "lfd_nr",
+        "uenb",
+        "uenb_bnr",
+        "jahr",
+        "bemessungsleistung_kw",
+        "einsatzstoff_biomasse",
+        "strasse",
+        "plz",
+        "ort",
+        "bundesland",
+    }
+)
 IGNORED_PREFIX = "_ignored_"
 
 # The column sets that occur in the files. A header must give one of them, so a changed format
@@ -90,11 +114,15 @@ _FROM_2024 = frozenset(
     }
 )
 LAYOUTS = (
-    _UP_TO_2019,  # 2016 to 2019, except Amprion 2016, 2018 and 2019
-    # Amprion 2016: payments and vNNE in two files
+    # 2016 to 2019, except Amprion 2016, 2018 and 2019; TenneT 2011, 2013 and 2015, 50Hertz 2015
+    _UP_TO_2019,
+    _UP_TO_2019 - {"nb_bnr"},  # 50Hertz 2014: grid operator by name only
+    _UP_TO_2019 - {"nb_bnr", "netzbetreiber"},  # Amprion 2011: no grid operator
+    _UP_TO_2019 - {"nb_bnr", "vermiedene_netzentgelte"},  # TenneT 2012: by name, no vNNE
+    # Amprion 2016: payments and vNNE in two files; Amprion 2013: the payments file only
     frozenset({"anlagenschluessel", "verguetungskategorie", "strommenge", "eeg_zahlung"}),
     frozenset({"anlagenschluessel", "verguetungskategorie", "vermiedene_netzentgelte"}),
-    _AMPRION_2018,  # Amprion 2018 and 2019
+    _AMPRION_2018,  # Amprion 2018 and 2019; TenneT 2014
     _AMPRION_2018 | {"veraeusserungsform"},  # Amprion 2018 with column TYP
     _2020,
     _2020 | {"monat"},  # 2021 and 2022; 50Hertz and TenneT 2023

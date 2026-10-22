@@ -17,14 +17,22 @@ from tests.builders import (
     HEADER_TRANSNETBW_2,
 )
 from tests.old_formats import (
+    HEADER_50HERTZ_2014,
+    HEADER_50HERTZ_2015,
     HEADER_50HERTZ_2016,
     HEADER_2017,
+    HEADER_AMPRION_2011,
+    HEADER_AMPRION_2013,
     HEADER_AMPRION_2016_VGT,
     HEADER_AMPRION_2016_VNE,
     HEADER_AMPRION_2017,
     HEADER_AMPRION_2018,
     HEADER_AMPRION_2018_VNE,
     HEADER_AMPRION_2022,
+    HEADER_TENNET_2011,
+    HEADER_TENNET_2012,
+    HEADER_TENNET_2013,
+    HEADER_TENNET_2014,
     HEADER_TENNET_2016,
     HEADER_TENNET_2023,
     HEADER_TENNET_2024_FIRST,
@@ -52,6 +60,9 @@ from tests.old_formats import (
         ("vermiedene Netznutzungsentgelte (vNNE) [EUR]", "vermiedene_netznutzungsentgelte"),
         ("in 2016 eingespeiste Jahresarbeit [kWh]", "in_eingespeiste_jahresarbeit"),
         (" ID", "id"),
+        ("BNetzA-ID", "bnetza_id"),  # TenneT 2011
+        ("MENGE [KWH]", "menge"),  # Amprion 2013
+        ("VERGÜTUNG [€]", "verguetung"),  # 50Hertz 2015
     ],
 )
 def test_normalize_header(raw: str, expected: str) -> None:
@@ -113,6 +124,88 @@ FROM_2020 = [
 @pytest.mark.parametrize(
     ("header", "expected"),
     [
+        pytest.param(
+            HEADER_TENNET_2011,
+            [
+                IGNORED_PREFIX + "uenb",
+                "nb_bnr",
+                "netzbetreiber",
+                "anlagenschluessel",
+                "verguetungskategorie",
+                "strommenge",
+                "eeg_zahlung",
+                "vermiedene_netzentgelte",
+            ],
+            id="tennet-2011",
+        ),
+        pytest.param(
+            HEADER_TENNET_2012,
+            [
+                "netzbetreiber",
+                IGNORED_PREFIX + "jahr",
+                "anlagenschluessel",
+                "verguetungskategorie",
+                IGNORED_PREFIX + "einsatzstoff_biomasse",
+                "strommenge",
+                "eeg_zahlung",
+            ],
+            id="tennet-2012",
+        ),
+        pytest.param(
+            HEADER_TENNET_2013,
+            ["nb_bnr", "netzbetreiber", *UP_TO_2019[:1], *UP_TO_2019[3:]],
+            id="tennet-2013-and-2015",
+        ),
+        pytest.param(
+            HEADER_TENNET_2014, ["nb_bnr", *UP_TO_2019[:1], *UP_TO_2019[3:]], id="tennet-2014"
+        ),
+        pytest.param(
+            HEADER_AMPRION_2011,
+            [
+                IGNORED_PREFIX + "lfd_nr",
+                "anlagenschluessel",
+                IGNORED_PREFIX + "strasse",
+                IGNORED_PREFIX + "plz",
+                IGNORED_PREFIX + "ort",
+                IGNORED_PREFIX + "bundesland",
+                "verguetungskategorie",
+                "strommenge",
+                "eeg_zahlung",
+                "vermiedene_netzentgelte",
+            ],
+            id="amprion-2011",
+        ),
+        pytest.param(
+            HEADER_AMPRION_2013,
+            ["anlagenschluessel", "verguetungskategorie", "strommenge", "eeg_zahlung"],
+            id="amprion-2013",
+        ),
+        pytest.param(
+            HEADER_50HERTZ_2014,
+            [
+                "netzbetreiber",
+                "anlagenschluessel",
+                "verguetungskategorie",
+                "strommenge",
+                "eeg_zahlung",
+                "vermiedene_netzentgelte",
+            ],
+            id="50hertz-2014",
+        ),
+        pytest.param(
+            HEADER_50HERTZ_2015,
+            [
+                IGNORED_PREFIX + "rownum",
+                "nb_bnr",
+                "netzbetreiber",
+                "anlagenschluessel",
+                "verguetungskategorie",
+                "strommenge",
+                "eeg_zahlung",
+                "vermiedene_netzentgelte",
+            ],
+            id="50hertz-2015",
+        ),
         pytest.param(
             HEADER_50HERTZ_2016,
             [

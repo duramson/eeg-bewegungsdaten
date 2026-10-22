@@ -1,15 +1,16 @@
 # Findings
 
-What the files of 2016 to 2025 hold, and how well `eeg-bewegungsdaten` reads them and
+What the files of 2011 to 2025 hold, and how well `eeg-bewegungsdaten` reads them and
 matches them with the MaStR. The [README](../README.md) describes the tool and its output.
 `uv run pytest --realdata` checks the line counts and the sums against the annual account.
 
 ## Reading the files
 
-### Formats of 2016 to 2025
+### Formats of 2011 to 2025
 
 | Years | Layout | Notes |
 | --- | --- | --- |
+| 2011–2015 | own layout per file | the nine files from the TSOs' own sites (see [Older years](../README.md#older-years)); TenneT 2011, 2013 and 2015 and 50Hertz 2015 have the columns of 2016; TenneT 2014 has the BDEW number of the grid operator without its name, 50Hertz 2014 the name without the number; TenneT 2012 has no vNNE, and a year and a biomass fuel column; Amprion 2011 adds the plant address (kept only in `rohzeile`); of Amprion 2013 only the payments file survives, not the vNNE file; TenneT 2015 is a TXT file, 50Hertz 2014 and 2015 a bare CSV |
 | 2016 | own layout per TSO | other column names, Amprion in two files (payments, vNNE), 50Hertz and TransnetBW quote names and add a row number |
 | 2017–2019 | `EEG_Anlagenschluessel;NB_BNR;Netzbetreiber;Verguetungskategorie;Strommenge;EEG_Zahlung;Vermiedene_Netzentgelte` | no MaStR numbers, no `Veraeusserungsform` (Amprion 2018: `TYP`), no `Monat`; Amprion 2018–2019 without name, with the TSO's BDEW number |
 | 2020 | 11 columns | MaStR numbers added, `Veraeusserungsform` as text |
@@ -18,7 +19,8 @@ matches them with the MaStR. The [README](../README.md) describes the tool and i
 | 2024 | 10 columns | `EEG_Einnahmen` instead of `Vermiedene_Netzentgelte`; TenneT in four ZIPs |
 | 2025 | 10 columns | TenneT adds `NB_BNR` and `Netzbetreiber` (12 columns) |
 
-Up to 2023 most files are cp1252 throughout. In 2024 and 2025, Amprion and TransnetBW use
+Up to 2023 most files are cp1252 throughout (50Hertz 2014: UTF-8 with a byte-order mark). In
+2024 and 2025, Amprion and TransnetBW use
 cp1252, 50Hertz and TenneT UTF-8. Some files use thousands separators (`138.981,03`), Amprion
 2018 and 2019 pad values with spaces and write rounding noise as `3,9886E-06`.
 
@@ -31,12 +33,18 @@ cp1252, 50Hertz and TenneT UTF-8. Some files use thousands separators (`138.981,
 | TenneT | 3,791,801 | 3,791,801 | 0 | 89,829 `MASTR_NR_MISSING`, 2,666 `MASTR_NR_MULTIPLE` |
 | TransnetBW | 1,499,225 | 1,499,225 | 0 | 1,016,002 `MONAT_EMPTY`, 6,135 `MASTR_NR_MISSING`, 152 `ENCODING_CP1252` |
 
-### Results for 2016 to 2024
+### Results for 2011 to 2024
 
-Lines per year and TSO; in brackets the lines in quarantine.
+Lines per year and TSO; in brackets the lines in quarantine. Before 2016 only the nine files
+that survive.
 
 | Year | 50Hertz | Amprion | TenneT | TransnetBW |
 | --- | ---: | ---: | ---: | ---: |
+| 2011 | – | 801,547 (8) | 1,226,229 | – |
+| 2012 | – | – | 1,620,764 | – |
+| 2013 | – | 826,698 | 1,828,808 | – |
+| 2014 | 567,565 | – | 1,947,532 | – |
+| 2015 | 614,756 (1) | – | 2,022,732 | – |
 | 2016 | 551,649 | 1,378,047 | 2,062,201 | 779,341 |
 | 2017 | 580,962 | 1,431,901 | 2,131,567 | 807,715 |
 | 2018 | 610,064 | 1,396,775 | 2,218,870 | 870,025 |
@@ -49,6 +57,9 @@ Lines per year and TSO; in brackets the lines in quarantine.
 
 What stands out:
 
+- **Amprion 2011:** 4 rows of one plant have a line break inside the quoted town, so 8 lines
+  fail `FIELD_COUNT`.
+- **50Hertz 2015:** the last line is a totals line (`5.671.006.684,16 €`), `BAD_NUMBER`.
 - **50Hertz 2020:** 8 plant keys contain DOS umlauts (`0x81` for `ü`), so the lines are
   `UNDECODABLE`.
 - **Amprion 2021:** 3 rows have `Monat` `1-12`. They get `MONAT_INVALID`, and `monat` is null.
@@ -144,12 +155,33 @@ For 2023 to 2025, the Bewegungsdaten match it for every TSO:
   has ended (legend). The latter is in form 5, in categories ending in `aMW`: 0.56 TWh and
   22.5 million euros in 2025.
 - The account includes the rows with `EXTRA_VALUE` of TransnetBW 2024 and with `Monat` `13` of
-  Amprion 2023 (see [Results for 2016 to 2024](#results-for-2016-to-2024)). `clean` holds them
+  Amprion 2023 (see [Results for 2011 to 2024](#results-for-2011-to-2024)). `clean` holds them
   with their flag.
 - Amprion 2025 puts 33,264 self-consumption rows (`SV`, 0.14 TWh, no payment) in form 1.
 
+The files before 2016 have no `Veraeusserungsform`, so all payments are compared at once with
+the payment tables of the account (feed-in tariff, market premium and flexibility premium), and
+the avoided grid fees with the vNE table. The accounts of
+[2011](https://web.archive.org/web/20160703024843/http://www.netztransparenz.de/de/file/2011_EEG-Jahresabrechnung.pdf),
+[2014](https://web.archive.org/web/20160415101748/http://www.netztransparenz.de/de/file/EEG-Jahresabrechnung_2014.pdf)
+and
+[2015](https://web.archive.org/web/20171225124934/https://www.netztransparenz.de/portals/1/Content/Erneuerbare-Energien-Gesetz/Jahresabrechnungen/EEG-Jahresabrechnung_2015.pdf)
+are in the Wayback Machine; 2012 and 2013 were not found.
+
+| File | Payments | Avoided grid fees |
+| --- | ---: | ---: |
+| Amprion 2011 | 611 euros less (0.00002 %) | 6 euros more |
+| TenneT 2011 | 22,195 euros less (0.0003 %) | 705 euros more (0.0005 %) |
+| 50Hertz 2014 | exact | exact |
+| TenneT 2014 | 91,763 euros more (0.001 %) | 5,825 euros less (0.002 %) |
+| 50Hertz 2015 | exact | exact |
+| TenneT 2015 | 176 euros less | 103 euros less |
+
+This also settles the year of the Amprion file `Bewegungsdaten_Internet.zip`, whose name has
+none: Amprion's page of 2011 linked it, and its sums are those of 2011.
+
 `uv run pytest --realdata tests/test_annual_account.py` repeats the check of the payments and of
-other direct marketing.
+other direct marketing, and the check of the files before 2016.
 
 ## Matching with the MaStR
 

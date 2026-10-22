@@ -10,6 +10,7 @@ import pytest
 
 from eeg_bewegungsdaten.download import archive_path
 from eeg_bewegungsdaten.links import (
+    EARLIER_FILES,
     OLDER_FILES,
     PAGE_URL,
     UENB,
@@ -125,8 +126,8 @@ def test_older_links_cover_every_tso_from_2016_on() -> None:
     links = older_links()
     data = [link for link in links if link.kind == "bewegungsdaten"]
 
-    assert len(links) == len(OLDER_FILES)
-    assert {(link.year, link.uenb) for link in data} == {
+    assert len(links) == len(EARLIER_FILES) + len(OLDER_FILES)
+    assert {(link.year, link.uenb) for link in data if (link.year or 0) >= 2016} == {
         (year, uenb) for year in range(2016, newest_known_year() + 1) for uenb in UENB
     }
     assert any(link.kind == "legende" for link in links)
@@ -169,8 +170,40 @@ def test_older_links_before_2021_come_from_the_wayback_machine() -> None:
     for link in older_links():
         wayback = link.url.startswith("https://web.archive.org/web/")
         assert wayback == (link.year is not None and link.year <= 2020), link.url
-        if wayback:
+        if wayback and (link.year or 0) >= 2016:
             assert "id_/https://www.netztransparenz.de/" in link.url
+
+
+def test_files_before_2016_come_from_the_tso_sites_with_sha256() -> None:
+    earlier = [link for link in older_links() if link.year is not None and link.year < 2016]
+
+    assert sorted((link.year, link.uenb) for link in earlier) == [
+        (2011, "amprion"),
+        (2011, "tennet"),
+        (2012, "tennet"),
+        (2013, "amprion"),
+        (2013, "tennet"),
+        (2014, "50hertz"),
+        (2014, "tennet"),
+        (2015, "50hertz"),
+        (2015, "tennet"),
+    ]
+    sites = {"50hertz": "50hertz.com", "amprion": "amprion.net", "tennet": "tennet(tso.de|.eu)"}
+    for link in earlier:
+        wayback = (
+            rf"https://web\.archive\.org/web/20\d{{12}}id_/https?://www\.{sites[str(link.uenb)]}/.+"
+        )
+        assert re.fullmatch(wayback, link.url)
+        assert link.kind == "bewegungsdaten"
+        assert link.filename.lower().endswith((".zip", ".csv"))
+        assert link.file_id is None
+        assert link.published
+        assert not link.listed
+        assert link.fallback_url is None
+        assert link.sha256 is not None
+        assert re.fullmatch(r"[0-9a-f]{64}", link.sha256)
+    folders = {archive_path(Path("data"), link).parent for link in earlier}
+    assert len(folders) == len(earlier)
 
 
 def test_wayback_copies_of_files_on_the_server_have_url_and_sha256() -> None:
@@ -179,7 +212,8 @@ def test_wayback_copies_of_files_on_the_server_have_url_and_sha256() -> None:
     assert with_copy
     for link in older_links():
         if link.fallback_url is None:
-            assert link.sha256 is None
+            # Only the Wayback copies of the files before 2016 are checked without a fallback.
+            assert (link.sha256 is not None) == (link.year is not None and link.year < 2016)
             continue
         assert link.url.startswith(
             ("https://www.netztransparenz.de/xspproxy/", "https://www.netztransparenz.de/cdn/")

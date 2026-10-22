@@ -8,7 +8,8 @@ Optionally, `mastr` finds the plant of every clean row in the Marktstammdatenreg
 
 > This project is unofficial and not affiliated with netztransparenz.de or the TSOs.
 
-Status: early development, not on PyPI. Tested with the files for 2016 to 2025.
+Status: early development, not on PyPI. Tested with the files for 2016 to 2025 and the nine
+files before 2016 that survive.
 
 The files hold personal data and have no settled license. Read [Data license](#data-license)
 before you download older years or share anything derived from them.
@@ -34,7 +35,7 @@ Market premium rows are mostly monthly from 2021 on; most other rows are annual 
 - Each TSO publishes one ZIP per year with 1 to 14 CSV files (TenneT 2024: four ZIPs), 9.3
   million lines in total for 2025. The TSOs differ in encoding, line endings, column names and
   number of columns, and the layout changed several times, see
-  [Formats of 2016 to 2025](docs/findings.md#formats-of-2016-to-2025).
+  [Formats of 2011 to 2025](docs/findings.md#formats-of-2011-to-2025).
 
 ### Older years
 
@@ -47,15 +48,20 @@ The page only lists the latest year. The tool knows where the earlier files are 
   answers 404, `download` takes that copy instead.
 - **2016 to 2020** are gone from netztransparenz.de. The Wayback Machine has one copy of each
   file; the tool fetches the original bytes from `web.archive.org`.
-- **Before 2016** the data were not on netztransparenz.de. The Wayback Machine only has TenneT
-  2011 and 2012; the tool does not read them.
+- **Before 2016** each TSO published on its own site; netztransparenz.de never carried the
+  files. The Wayback Machine kept nine of them: Amprion 2011 and 2013, TenneT 2011 to 2015,
+  50Hertz 2014 and 2015 (`EARLIER_FILES`). Their names do not tell TSO and year, so the catalog
+  gives both, and `download` rejects a copy whose SHA-256 differs from the recorded one. 50Hertz
+  published 2014 and 2015 as a bare CSV file instead of a ZIP. No file of TransnetBW, of 50Hertz
+  before 2014 or of Amprion for 2012, 2014 and 2015 was found.
 
 `OLDER_FILES` also lists the files of 2025, the year on the page in October 2026. The tool takes
 them from the page as long as it lists them, and from `OLDER_FILES` once the page moves on to
 2026 (by 15 September 2027). Whether their URLs keep working then is unknown. Like the files of
 2021 to 2024, they and the legend have a copy with the same bytes in the Wayback Machine.
 
-All files of 2016 to 2024 are 899 MB. Two years were uploaded twice; the tool archives both
+All files of 2016 to 2024 are 899 MB, the nine files before 2016 201 MB. Two years were
+uploaded twice; the tool archives both
 uploads and `ingest` reads the one published last:
 
 - **TenneT 2024:** four parts of December 2025 replace three parts of September 2025 (66 MB
@@ -203,7 +209,7 @@ WHERE kodierung = 'cp1252';
 | `felder_kopf` | Int32 | Number of fields in the header |
 | `eeg_mastr_nr` … `monat` | String | The fields as published, not trimmed. Empty fields are empty strings; columns the file does not have, and fields missing at the end of a short line, are null |
 | `zusatzfelder` | List[String] | Fields under an empty header name, such as the two extra columns of Amprion's `ausgefoerdert.csv`; null if the file has none |
-| `rohzeile` | String | The whole line, only if `felder` differs from `felder_kopf` or the file has a column that is not kept (row numbers; the TSO's BDEW number in Amprion 2018 and 2019; the Bemessungsleistung in Amprion's vNNE file of 2016). Otherwise the fields hold the whole line |
+| `rohzeile` | String | The whole line, only if `felder` differs from `felder_kopf` or the file has a column that is not kept (row numbers; the TSO's BDEW number in Amprion 2018 and 2019; the Bemessungsleistung in Amprion's vNNE file of 2016; the plant address in Amprion 2011; the year and the biomass fuel in TenneT 2012). Otherwise the fields hold the whole line |
 
 ### Columns of `clean`
 
@@ -272,7 +278,7 @@ energy = (
 
 With `grid_feed_in()`, the energy of 2023 to 2025 matches the annual account to 0.02 % (see
 [Checks against the EEG annual account](docs/findings.md#checks-against-the-eeg-annual-account)).
-The rules hold for 2016 to 2025; a category of a later year may need a new one. What each kind
+The rules hold for 2011 to 2025; a category of a later year may need a new one. What each kind
 of row holds, with its energy per year, is in [Special rows](docs/findings.md#special-rows).
 
 ## Quality checks
@@ -508,7 +514,7 @@ All columns of `clean` except `anlagenschluessel`, plus these:
 - The export keeps every row, also those of PV plants up to 30 kW. It does not show them only
   in aggregates, as [Personal data](#personal-data) advises.
 - Apart from `anlagenschluessel`, no column of `clean` holds free text about people (checked
-  for 2016 to 2025). `netzbetreiber` holds the names of grid operators; a few are sole traders
+  for 2011 to 2025). `netzbetreiber` holds the names of grid operators; a few are sole traders
   named after their owner. In a few thousand rows, `eeg_mastr_nr` holds a code such as
   `Grund_MASTRNR99` or a note such as `Noch ausstehend` instead of a number.
 
@@ -521,10 +527,11 @@ uv run pytest
 ```
 
 `uv run pytest --live` also checks the page on netztransparenz.de. `uv run pytest --realdata`
-also reads the downloaded files of 2016 to 2025 and compares the line counts and codes with
+also reads the downloaded files of 2011 to 2025 and compares the line counts and codes with
 reference counts, which are the counts in [docs/findings.md](docs/findings.md). It also checks
-the earlier uploads of TenneT 2024 and TransnetBW 2020, the sums of 2023 to 2025 against the EEG
-annual account, and an export of 2025 into a temporary folder, rebuilding its matches from the
+the earlier uploads of TenneT 2024 and TransnetBW 2020, the sums of 2023 to 2025 and of the
+years before 2016 against the EEG annual account, and an export of 2025 into a temporary folder,
+rebuilding its matches from the
 local open-MaStR database. Files that are not downloaded, or that changed upstream, are skipped.
 
 [`analysis/`](analysis/README.md) holds scripts that use the output and compare it with other
@@ -597,6 +604,8 @@ paths that no page links any more.
   number of plants up to 30 kW (§ 51 (3) nos. 1 and 2 EnFG).
 - Still, some plant keys (`EEG_Anlagenschluessel`, `anlagenschluessel` in `clean`) contain
   names of people or streets.
+- Amprion 2011 lists street, postcode and town of every plant. `clean` leaves these columns
+  out; the text layer keeps them in `rohzeile`.
 - Many rows belong to small PV plants of private persons. With the MaStR number, anyone can look
   up the town, capacity and start of operation of such a plant. The EEG payment is a financial
   figure.
