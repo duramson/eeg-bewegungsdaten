@@ -147,6 +147,132 @@ def test_aborted_download_leaves_nothing_behind(tmp_path: Path, link: DownloadLi
     assert read_meta(archive_path(tmp_path, link)) is None
 
 
+ETAG = '"v1"'
+
+
+@pytest.fixture
+def small_chunks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Write the few bytes before a break to the part; blocks of 1 MB would hold them back."""
+    monkeypatch.setattr("eeg_bewegungsdaten.download.CHUNK_SIZE", 10)
+
+
+class BrokenAfter(httpx.SyncByteStream):
+    def __init__(self, data: bytes) -> None:
+        self.data = data
+
+    def __iter__(self) -> Iterator[bytes]:
+        yield self.data
+        raise httpx.ReadError("connection reset")
+
+
+def breaks_off(at: int, etag: str | None = ETAG) -> httpx.Response:
+    """The whole file is announced, but the connection breaks after `at` bytes."""
+    headers = {"Content-Length": str(len(ZIP))} | ({"ETag": etag} if etag else {})
+    return httpx.Response(200, stream=BrokenAfter(ZIP[:at]), headers=headers)
+
+
+def rest(start: int, *, etag: str | None = ETAG, body: bytes = ZIP) -> httpx.Response:
+    """206 with the bytes of `body` from `start` on."""
+    headers = {"Content-Range": f"bytes {start}-{len(body) - 1}/{len(body)}"}
+    return httpx.Response(
+        206, content=body[start:], headers=headers | ({"ETag": etag} if etag else {})
+    )
+
+
+def answers(*responses: httpx.Response) -> Server:
+    """Answers with `responses` in turn."""
+    queue = list(responses)
+    return Server(lambda request: queue.pop(0))
+
+
+@pytest.mark.usefixtures("small_chunks")
+def test_broken_transfer_goes_on_with_a_range_request(tmp_path: Path, link: DownloadLink) -> None:
+    server = answers(breaks_off(20), rest(20))
+
+    with server.client() as client:
+        result = download(link, tmp_path, client)
+
+    assert result.path.read_bytes() == ZIP
+    assert result.meta["sha256"] == hashlib.sha256(ZIP).hexdigest()
+    assert result.meta["size"] == len(ZIP)
+    again = server.requests[1].headers
+    assert (again["Range"], again["If-Range"]) == ("bytes=20-", ETAG)
+    assert leftovers(tmp_path) == sorted([link.filename, link.filename + ".meta.json"])
+
+
+@pytest.mark.usefixtures("small_chunks")
+def test_broken_off_part_waits_for_the_next_run(tmp_path: Path, link: DownloadLink) -> None:
+    with (
+        answers(breaks_off(20), httpx.Response(404)).client() as client,
+        pytest.raises(httpx.HTTPStatusError),
+    ):
+        download(link, tmp_path, client)
+
+    assert leftovers(tmp_path) == [link.filename + ".part", link.filename + ".part.json"]
+
+    server = answers(rest(20))
+    with server.client() as client:
+        result = download(link, tmp_path, client)
+
+    assert result.path.read_bytes() == ZIP
+    assert server.requests[0].headers["Range"] == "bytes=20-"
+
+
+@pytest.mark.usefixtures("small_chunks")
+def test_changed_file_is_downloaded_from_the_start(tmp_path: Path, link: DownloadLink) -> None:
+    """With another ETag, the server ignores the range (If-Range) and sends the whole file."""
+    server = answers(breaks_off(20), httpx.Response(200, content=ZIP, headers={"ETag": '"v2"'}))
+
+    with server.client() as client:
+        result = download(link, tmp_path, client)
+
+    assert result.path.read_bytes() == ZIP
+    assert result.meta["etag"] == '"v2"'
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [rest(10), rest(20, etag='"v2"'), httpx.Response(416)],
+    ids=["other-range", "other-etag", "416"],
+)
+@pytest.mark.usefixtures("small_chunks")
+def test_answer_that_does_not_continue_the_part_starts_again(
+    tmp_path: Path, link: DownloadLink, answer: httpx.Response
+) -> None:
+    server = answers(breaks_off(20), answer, httpx.Response(200, content=ZIP))
+
+    with server.client() as client:
+        result = download(link, tmp_path, client)
+
+    assert result.path.read_bytes() == ZIP
+    assert len(server.requests) == 3
+    assert "Range" not in server.requests[2].headers
+
+
+@pytest.mark.usefixtures("small_chunks")
+def test_part_without_validator_is_not_kept(tmp_path: Path, link: DownloadLink) -> None:
+    server = answers(breaks_off(20, etag=None), httpx.Response(404))
+
+    with server.client() as client, pytest.raises(httpx.HTTPStatusError):
+        download(link, tmp_path, client)
+
+    assert "Range" not in server.requests[1].headers
+    assert leftovers(tmp_path) == []
+
+
+@pytest.mark.usefixtures("small_chunks")
+def test_failed_check_after_going_on_leaves_nothing_behind(
+    tmp_path: Path, link: DownloadLink
+) -> None:
+    broken = ZIP[:20] + b"x" * (len(ZIP) - 20)
+    server = answers(breaks_off(20), rest(20, body=broken))
+
+    with server.client() as client, pytest.raises(DownloadError):
+        download(link, tmp_path, client)
+
+    assert leftovers(tmp_path) == []
+
+
 def held(monkeypatch: pytest.MonkeyPatch, times: int) -> list[float]:
     """Let renaming fail `times` times with PermissionError, as while a virus scanner holds the
     file; return the pauses in between."""
@@ -499,6 +625,21 @@ def test_only_404_leads_to_the_wayback_copy(tmp_path: Path, status: int) -> None
     # A 5xx is tried again on the same URL, but never leads to the Wayback copy
     assert requested(server) == [LIVE_2022] * (ATTEMPTS if status in RETRY_STATUS else 1)
     assert leftovers(tmp_path) == []
+
+
+@pytest.mark.usefixtures("small_chunks")
+def test_broken_wayback_copy_goes_on_without_if_range(tmp_path: Path) -> None:
+    """Captures of the Wayback Machine have neither ETag nor Last-Modified, but never change."""
+    server = answers(httpx.Response(404), breaks_off(20, etag=None), rest(20, etag=None))
+
+    with server.client() as client:
+        result = download(with_copy(), tmp_path, client)
+
+    assert result.path.read_bytes() == ZIP
+    assert requested(server) == [LIVE_2022, WAYBACK_2022, WAYBACK_2022]
+    again = server.requests[2].headers
+    assert again["Range"] == "bytes=20-"
+    assert "If-Range" not in again
 
 
 def test_missing_wayback_copy_is_an_error(tmp_path: Path) -> None:

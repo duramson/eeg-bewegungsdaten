@@ -93,8 +93,10 @@ uv run eeg-bewegungsdaten verify
 - `download` archives every data file and the legends: about 170 MB for 2025, 1 GB for all
   years. Files already in the archive are skipped; if one file fails, the others still load.
   A broken connection, a timeout or a busy server (429, 5xx) is tried up to four times per
-  file, after 1, 2 and 4 seconds or what `Retry-After` asks for (at most a minute). A full disk
-  stops the run. A file whose bytes differ from the SHA-256 the tool records for it is archived
+  file, after 1, 2 and 4 seconds or what `Retry-After` asks for (at most a minute). A transfer
+  that breaks off, also by Ctrl+C, goes on from where it stopped on the next attempt or run, where
+  the server allows it (the Wayback Machine and netztransparenz.de's files of earlier years; the
+  CDN of the current year sends the whole file again). A full disk stops the run. A file whose bytes differ from the SHA-256 the tool records for it is archived
   as it is now, with a warning and `expected_sha256` in its metadata, and `download` exits
   with 1: the TSO may have replaced it.
   On a terminal it shows the running file with its progress, the next files in the queue and a
