@@ -173,7 +173,7 @@ def _download(args: argparse.Namespace) -> int:
                         break
                 else:
                     shown.finished(link, result)
-    return 1 if shown.failures else 0
+    return 1 if shown.failures or shown.changed else 0
 
 
 def _is_archived(data_dir: Path, link: DownloadLink) -> bool:

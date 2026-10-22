@@ -468,6 +468,25 @@ def test_file_on_the_server_does_not_touch_the_wayback_copy(tmp_path: Path) -> N
     assert requested(server) == [LIVE_2022]
     assert result.meta["source_url"] == LIVE_2022
     assert result.meta["orig_last_modified"] is None
+    assert "expected_sha256" not in result.meta
+
+
+def test_file_on_the_server_with_other_bytes_is_kept_and_reported(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The TSO may replace a file under the same URL: keep what it publishes now, but say so."""
+    recorded = hashlib.sha256(b"other").hexdigest()
+    link = dataclasses.replace(with_copy(), sha256=recorded)
+
+    with serve(ZIP).client() as client:
+        result = download(link, tmp_path, client)
+
+    assert result.path.read_bytes() == ZIP
+    assert result.meta["sha256"] == hashlib.sha256(ZIP).hexdigest()
+    assert result.meta["expected_sha256"] == recorded
+    assert read_meta(result.path) == result.meta
+    (warning,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert "has other bytes than recorded" in warning.getMessage()
 
 
 @pytest.mark.parametrize("status", [403, 410, 500, 503])

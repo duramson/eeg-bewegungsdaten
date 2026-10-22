@@ -227,6 +227,10 @@ class RunDisplay:
         """Lines after the time in the final summary, such as where the output went."""
         return []
 
+    def warning(self) -> str | None:
+        """The title of a run without errors that still needs attention."""
+        return None
+
     def running_note(self, item: Item) -> str | None:
         """Text instead of speed and time left, e.g. for a phase that has no progress."""
         return None
@@ -452,10 +456,13 @@ class RunDisplay:
     def _final(self) -> None:
         now = time.monotonic()
         failures = self.failures
+        warning = self.warning()
         if self._interrupted:
             title = Text(f"{self.symbols.failed} Interrupted", "eeg.warn")
         elif failures:
             title = Text(f"{self.symbols.failed} Finished with errors", "eeg.error")
+        elif warning:
+            title = Text(f"{self.symbols.failed} {warning}", "eeg.warn")
         else:
             title = Text(f"{self.symbols.done} Done", "eeg.ok")
         self.output.print()
@@ -517,12 +524,17 @@ class DownloadDisplay(RunDisplay):
     def done_cells(self, item: Item) -> list[Text]:
         meta = item.result.meta
         source = _source(str(meta.get("source_url") or meta["url"]))
+        checksum = Text(f"sha256 {meta['sha256'][:12]}", "eeg.muted")
+        if "expected_sha256" in meta:
+            checksum = Text(
+                f"sha256 {meta['sha256'][:12]}, recorded {meta['expected_sha256'][:12]}", "eeg.warn"
+            )
         return [
             Text(f"{decimal(int(meta['size'])):>9}"),
             Text(f"{_took(item.seconds):>5}"),
             Text(f"{_rate(int(meta['size']), item.seconds):>10}"),
             Text(f"{source:<18}", "eeg.warn" if source == "Wayback Machine" else "eeg.accent"),
-            Text(f"sha256 {meta['sha256'][:12]}", "eeg.muted"),
+            checksum,
         ]
 
     def skipped_cells(self, item: Item) -> list[Text]:
@@ -559,7 +571,26 @@ class DownloadDisplay(RunDisplay):
         return [("Data", data)]
 
     def final_lines(self) -> list[tuple[str, Text | str]]:
-        return [("Archive", str(self.data_dir / "raw"))]
+        lines: list[tuple[str, Text | str]] = [("Archive", str(self.data_dir / "raw"))]
+        if self.changed:
+            names = ", ".join(
+                " ".join(filter(None, (str(i.year or ""), i.name, i.part))) for i in self.changed
+            )
+            lines.append(
+                (
+                    "Changed",
+                    Text(f"{names}: other bytes than recorded, archived as now", "eeg.warn"),
+                )
+            )
+        return lines
+
+    def warning(self) -> str | None:
+        return "Finished with changed files" if self.changed else None
+
+    @property
+    def changed(self) -> list[Item]:
+        """Files downloaded with other bytes than the SHA-256 recorded for them."""
+        return [i for i in self.items if i.state == "done" and "expected_sha256" in i.result.meta]
 
     # The calls of `download`, by link
 
