@@ -21,6 +21,7 @@ import hashlib
 import json
 import logging
 import os
+import time
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +39,9 @@ log = logging.getLogger(__name__)
 
 META_SUFFIX = ".meta.json"
 CHUNK_SIZE = 1 << 20
+#: Attempts to rename a finished download. On Windows a virus scanner or the search indexer may
+#: still hold the new file for a moment.
+RENAME_ATTEMPTS = 5
 
 
 class DownloadError(RuntimeError):
@@ -188,7 +192,7 @@ def _fetch(
         if sha256 is not None and digest.hexdigest() != sha256:
             raise DownloadError(f"{url}: SHA-256 {digest.hexdigest()}, expected {sha256}")
         _check_zip(part, url)
-        part.replace(path)
+        _replace(part, path)
     finally:
         part.unlink(missing_ok=True)
 
@@ -214,6 +218,20 @@ def _fetch(
         "etag": headers.get("ETag"),
         "tool_version": __version__,
     }
+
+
+def _replace(part: Path, path: Path) -> None:
+    """Rename `part` to `path`; while another program holds the file, wait and try again (0.2 to
+    1.6 seconds, 3 seconds in all)."""
+    for attempt in range(1, RENAME_ATTEMPTS + 1):
+        try:
+            part.replace(path)
+            return
+        except PermissionError:
+            if attempt == RENAME_ATTEMPTS:
+                raise
+            log.debug("%s is in use, renaming it again (attempt %d)", part, attempt + 1)
+            time.sleep(0.1 * 2**attempt)
 
 
 def _check_zip(path: Path, url: str) -> None:

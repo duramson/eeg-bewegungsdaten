@@ -136,6 +136,48 @@ def test_aborted_download_leaves_nothing_behind(tmp_path: Path, link: DownloadLi
     assert read_meta(archive_path(tmp_path, link)) is None
 
 
+def held(monkeypatch: pytest.MonkeyPatch, times: int) -> list[float]:
+    """Let renaming fail `times` times with PermissionError, as while a virus scanner holds the
+    file; return the pauses in between."""
+    replace = Path.replace
+    calls: list[Path] = []
+    pauses: list[float] = []
+
+    def locked(self: Path, target: Path) -> Path:
+        calls.append(target)
+        if len(calls) <= times:
+            raise PermissionError(13, "The process cannot access the file", str(self))
+        return replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", locked)
+    monkeypatch.setattr("eeg_bewegungsdaten.download.time.sleep", pauses.append)
+    return pauses
+
+
+def test_rename_is_retried_while_the_file_is_held(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, link: DownloadLink
+) -> None:
+    pauses = held(monkeypatch, times=2)
+
+    with serve(ZIP).client() as client:
+        result = download(link, tmp_path, client)
+
+    assert result.path.read_bytes() == ZIP
+    assert pauses == [0.2, 0.4]
+
+
+def test_file_held_too_long_fails_and_leaves_nothing_behind(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, link: DownloadLink
+) -> None:
+    pauses = held(monkeypatch, times=99)
+
+    with serve(ZIP).client() as client, pytest.raises(PermissionError):
+        download(link, tmp_path, client)
+
+    assert len(pauses) == 4
+    assert leftovers(tmp_path) == []
+
+
 def test_short_body_is_rejected(tmp_path: Path, link: DownloadLink) -> None:
     class Short(httpx.SyncByteStream):
         def __iter__(self) -> Iterator[bytes]:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import errno
 import logging
 import zipfile
 from collections.abc import Sequence
@@ -142,6 +143,10 @@ def _links(args: argparse.Namespace) -> int:
     return 0
 
 
+# Errors of the file system that every later file would hit as well
+_DISK_FULL = {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}
+
+
 def _download(args: argparse.Namespace) -> int:
     data_dir = _data_dir(args)
     with new_client() as client:
@@ -161,8 +166,11 @@ def _download(args: argparse.Namespace) -> int:
                 log.debug("%s %s: %s", link.year or "-", link.uenb or link.kind, link.url)
                 try:
                     result = download(link, data_dir, client, progress=shown.start(link.url))
-                except (httpx.HTTPError, DownloadError) as e:
+                except (httpx.HTTPError, DownloadError, OSError) as e:
                     shown.failed(link, e)
+                    if isinstance(e, OSError) and e.errno in _DISK_FULL:
+                        log.error("The disk is full; the other files are not downloaded")
+                        break
                 else:
                     shown.finished(link, result)
     return 1 if shown.failures else 0

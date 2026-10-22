@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import io
 from collections.abc import Callable
 from pathlib import Path
@@ -119,6 +120,55 @@ def test_download_goes_on_after_a_failed_file(
     assert lines[-1] == "Run the same command again to retry the failed files."
     assert not [p for p in (tmp_path / "raw" / "2017").rglob("*") if p.is_file()]
     assert (tmp_path / "raw" / "2018" / "tennet").is_dir()
+
+
+def refuse_rename(monkeypatch: pytest.MonkeyPatch, error: OSError, when: str) -> None:
+    """Let renaming the finished downloads whose path contains `when` fail with `error`."""
+    replace = Path.replace
+
+    def refused(self: Path, target: Path) -> Path:
+        if when in str(target).lower():
+            raise error
+        return replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", refused)
+    monkeypatch.setattr("eeg_bewegungsdaten.download.time.sleep", lambda seconds: None)
+
+
+def test_download_goes_on_after_an_os_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A virus scanner that does not let go of Amprion 2018 fails that file only."""
+    serve_page(monkeypatch)
+    refuse_rename(monkeypatch, PermissionError(13, "The file is in use"), "amprion")
+
+    assert cli.main(["--data-dir", str(tmp_path), "download", "--year", "2018"]) == 1
+
+    lines = capsys.readouterr().err.splitlines()
+    failed = [row for row in lines[1 : lines.index("")] if row.startswith("✗ ")]
+    assert len(failed) == 1
+    assert failed[0].split()[1:3] == ["2018", "amprion"]
+    assert "The file is in use" in failed[0]
+    files = sorted(p.parent.parent.name for p in (tmp_path / "raw" / "2018").rglob("*.zip"))
+    assert files == ["50hertz", "tennet", "transnetbw"]
+    assert not list((tmp_path / "raw" / "2018" / "amprion").rglob("*.*"))
+
+
+def test_download_stops_when_the_disk_is_full(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    requests = serve_page(monkeypatch)
+    refuse_rename(monkeypatch, OSError(errno.ENOSPC, "No space left on device"), "")
+
+    assert cli.main(["--data-dir", str(tmp_path), "download", "--year", "2018"]) == 1
+
+    assert len([url for url in requests if url != PAGE_URL]) == 1
+    # The line of the file, and again in the summary
+    assert capsys.readouterr().err.count("No space left on device") == 2
+    assert caplog.messages.count("The disk is full; the other files are not downloaded") == 1
 
 
 def test_download_twice_lists_the_archived_files(
