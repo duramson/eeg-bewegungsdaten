@@ -10,7 +10,7 @@ matches them with the MaStR. The [README](../README.md) describes the tool and i
 
 | Years | Layout | Notes |
 | --- | --- | --- |
-| 2011–2015 | own layout per file | the nine files from the TSOs' own sites (see [Older years](../README.md#older-years)); TenneT 2011, 2013 and 2015 and 50Hertz 2015 have the columns of 2016; TenneT 2014 has the BDEW number of the grid operator without its name, 50Hertz 2014 the name without the number; TenneT 2012 has no vNNE, and a year and a biomass fuel column; Amprion 2011 adds the plant address (kept only in `rohzeile`); of Amprion 2013 only the payments file survives, not the vNNE file; TenneT 2015 is a TXT file, 50Hertz 2014 and 2015 a bare CSV |
+| 2011–2015 | own layout per file | the nine files from the TSOs' own sites (see [Older years](../README.md#older-years)); TenneT 2011, 2013 and 2015 and 50Hertz 2015 have the columns of 2016; TenneT 2014 has the BDEW number of the grid operator without its name, 50Hertz 2014 the name without the number; TenneT 2012 has no vNNE column (its `vNNe` rows hold the avoided grid fees as negative payments), and a year and a biomass fuel column; Amprion 2011 adds the plant address (kept only in `rohzeile`); of Amprion 2013 only the payments file survives, not the vNNE file; TenneT 2015 is a TXT file, 50Hertz 2014 and 2015 a bare CSV |
 | 2016 | own layout per TSO | other column names, Amprion in two files (payments, vNNE), 50Hertz and TransnetBW quote names and add a row number |
 | 2017–2019 | `EEG_Anlagenschluessel;NB_BNR;Netzbetreiber;Verguetungskategorie;Strommenge;EEG_Zahlung;Vermiedene_Netzentgelte` | no MaStR numbers, no `Veraeusserungsform` (Amprion 2018: `TYP`), no `Monat`; Amprion 2018–2019 without name, with the TSO's BDEW number |
 | 2020 | 11 columns | MaStR numbers added, `Veraeusserungsform` as text |
@@ -161,17 +161,21 @@ For 2023 to 2025, the Bewegungsdaten match it for every TSO:
 
 The files before 2016 have no `Veraeusserungsform`, so all payments are compared at once with
 the payment tables of the account (feed-in tariff, market premium and flexibility premium), and
-the avoided grid fees with the vNE table. The accounts of
+the avoided grid fees with the vNE table. TenneT 2012 has no column for the avoided grid fees:
+its `vNNe` rows hold them as negative payments, so the check takes them apart by category. The
+accounts of
 [2011](https://web.archive.org/web/20160703024843/http://www.netztransparenz.de/de/file/2011_EEG-Jahresabrechnung.pdf),
+[2012](https://web.archive.org/web/20140323134230/http://www.netztransparenz.de/de/file/2012_EEG-Jahresabrechnung_.pdf),
 [2014](https://web.archive.org/web/20160415101748/http://www.netztransparenz.de/de/file/EEG-Jahresabrechnung_2014.pdf)
 and
 [2015](https://web.archive.org/web/20171225124934/https://www.netztransparenz.de/portals/1/Content/Erneuerbare-Energien-Gesetz/Jahresabrechnungen/EEG-Jahresabrechnung_2015.pdf)
-are in the Wayback Machine; 2012 and 2013 were not found.
+are in the Wayback Machine; 2013 was not found.
 
 | File | Payments | Avoided grid fees |
 | --- | ---: | ---: |
 | Amprion 2011 | 611 euros less (0.00002 %) | 6 euros more |
 | TenneT 2011 | 22,195 euros less (0.0003 %) | 705 euros more (0.0005 %) |
+| TenneT 2012 | 23,859 euros more (0.0003 %) | 98,008 euros less (0.04 %) |
 | 50Hertz 2014 | exact | exact |
 | TenneT 2014 | 91,763 euros more (0.001 %) | 5,825 euros less (0.002 %) |
 | 50Hertz 2015 | exact | exact |

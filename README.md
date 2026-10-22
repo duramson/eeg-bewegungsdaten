@@ -52,8 +52,9 @@ The page only lists the latest year. The tool knows where the earlier files are 
   files. The Wayback Machine kept nine of them: Amprion 2011 and 2013, TenneT 2011 to 2015,
   50Hertz 2014 and 2015 (`EARLIER_FILES`). Their names do not tell TSO and year, so the catalog
   gives both, and `download` rejects a copy whose SHA-256 differs from the recorded one. 50Hertz
-  published 2014 and 2015 as a bare CSV file instead of a ZIP. No file of TransnetBW, of 50Hertz
-  before 2014 or of Amprion for 2012, 2014 and 2015 was found.
+  published 2014 and 2015 as a bare CSV file instead of a ZIP. TenneT 2012 has no column for
+  the avoided grid fees; its `vNNe` rows hold them as negative payments. No file of TransnetBW,
+  of 50Hertz before 2014 or of Amprion for 2012, 2014 and 2015 was found.
 
 `OLDER_FILES` also lists the files of 2025, the year on the page in October 2026. The tool takes
 them from the page as long as it lists them, and from `OLDER_FILES` once the page moves on to

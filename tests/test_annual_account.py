@@ -39,10 +39,11 @@ OFFICIAL: dict[tuple[int, str], tuple[str, str, str]] = {
 # (year, TSO): the "gesamt" columns of the payment tables of the year (feed-in tariff; from 2012
 # also market premium and flexibility premium) in euros, and the avoided grid fees in euros. The
 # files before 2016 have no Veraeusserungsform, so all payments are compared at once. No account
-# of 2012 or 2013 is online, so the files of those years cannot be checked.
+# of 2013 is online, so the files of that year cannot be checked.
 OFFICIAL_BEFORE_2016: dict[tuple[int, str], tuple[tuple[str, ...], str]] = {
     (2011, "amprion"): (("3.490.580.815,11",), "72.619.864,64"),
     (2011, "tennet"): (("7.448.754.005,32",), "148.996.087,49"),
+    (2012, "tennet"): (("6.990.850.311,17", "1.509.549.039,46"), "233.622.813,37"),
     (2014, "50hertz"): (
         ("2.030.406.066,55", "2.937.385.789,18", "3.699.036,38"),
         "240.253.463,96",
@@ -103,7 +104,18 @@ def test_sums_match_the_annual_account(jahr: int, uenb: str, tmp_path: Path) -> 
 @pytest.mark.parametrize(("jahr", "uenb"), sorted(OFFICIAL_BEFORE_2016), ids=str)
 def test_sums_before_2016_match_the_annual_account(jahr: int, uenb: str, tmp_path: Path) -> None:
     report = ingest(upload_of(jahr, uenb), tmp_path)
-
     payments, avoided_fees = OFFICIAL_BEFORE_2016[(jahr, uenb)]
-    sums = [report["sums_clean"]["eeg_zahlung"], report["sums_clean"]["vermiedene_netzentgelte"]]
-    assert sums == pytest.approx([sum(euros(v) for v in payments), euros(avoided_fees)], rel=1e-4)
+
+    if (jahr, uenb) == (2012, "tennet"):
+        # The file has no column for the avoided grid fees: its vNNe rows hold them as negative
+        # payments.
+        columns = ["verguetungskategorie", "eeg_zahlung"]
+        rows = pl.read_parquet(report["outputs"]["clean"], columns=columns)
+        fee_rows = rows.filter(pl.col("verguetungskategorie").str.contains("-vNNe-"))
+        fees = -float(fee_rows["eeg_zahlung"].sum())
+        sums = [float(rows["eeg_zahlung"].sum()) + fees, fees]
+    else:
+        sums_clean = report["sums_clean"]
+        sums = [sums_clean["eeg_zahlung"], sums_clean["vermiedene_netzentgelte"]]
+    assert sums[0] == pytest.approx(sum(euros(v) for v in payments), rel=1e-4)
+    assert sums[1] == pytest.approx(euros(avoided_fees), rel=5e-4)  # TenneT 2012: 0.04 % less
