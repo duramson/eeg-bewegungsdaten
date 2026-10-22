@@ -29,7 +29,7 @@ from eeg_bewegungsdaten.download import (
 from eeg_bewegungsdaten.export import ExportError, export
 from eeg_bewegungsdaten.http import new_client
 from eeg_bewegungsdaten.ingest import ingest, latest_uploads
-from eeg_bewegungsdaten.links import UENB, DownloadLink, find_links
+from eeg_bewegungsdaten.links import PAGE_URL, UENB, DownloadLink, find_links, older_links
 from eeg_bewegungsdaten.mastr import (
     MastrError,
     clean_files,
@@ -137,10 +137,25 @@ def _wanted(args: argparse.Namespace, jahr: int | None, uenb: str | None) -> boo
 
 
 def _links(args: argparse.Namespace) -> int:
-    for link in find_links():
+    links, page_read = _known_links()
+    for link in links:
         published = link.published.isoformat() if link.published else "-"
         print(f"{link.year or '-'}\t{link.uenb or link.kind}\t{published}\t{link.url}")
-    return 0
+    return 0 if page_read else 1
+
+
+def _known_links(client: httpx.Client | None = None) -> tuple[list[DownloadLink], bool]:
+    """The links of the page and the older files, and whether the page could be read. Without
+    the page, only the files in `OLDER_FILES` remain."""
+    try:
+        return find_links(client), True
+    except (httpx.HTTPError, LookupError) as e:
+        log.error(
+            "Cannot read %s (%s); going on with the files this version knows",
+            PAGE_URL,
+            display.reason(e),
+        )
+        return older_links(), False
 
 
 # Errors of the file system that every later file would hit as well
@@ -150,10 +165,9 @@ _DISK_FULL = {errno.ENOSPC, getattr(errno, "EDQUOT", errno.ENOSPC)}
 def _download(args: argparse.Namespace) -> int:
     data_dir = _data_dir(args)
     with new_client() as client:
+        known, page_read = _known_links(client)
         links = [
-            link
-            for link in find_links(client)
-            if link.kind == "legende" or _wanted(args, link.year, link.uenb)
+            link for link in known if link.kind == "legende" or _wanted(args, link.year, link.uenb)
         ]
         if not any(link.kind == "bewegungsdaten" for link in links):
             log.error("No known data files match --year/--uenb")
@@ -173,7 +187,7 @@ def _download(args: argparse.Namespace) -> int:
                         break
                 else:
                     shown.finished(link, result)
-    return 1 if shown.failures or shown.changed else 0
+    return 1 if shown.failures or shown.changed or not page_read else 0
 
 
 def _is_archived(data_dir: Path, link: DownloadLink) -> bool:

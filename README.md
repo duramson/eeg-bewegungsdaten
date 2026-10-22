@@ -89,6 +89,7 @@ uv run eeg-bewegungsdaten verify
   on the page contain an id that changes with every upload, so the tool reads them from the
   page and takes TSO and year from the file name. If the page lists a year that this version of
   the tool does not know yet, `links` and `download` warn: its files may come in a new format.
+  If the page cannot be read, both go on with the files this version knows and exit with 1.
 - `download` archives every data file and the legends: about 170 MB for 2025, 1 GB for all
   years. Files already in the archive are skipped; if one file fails, the others still load.
   A broken connection, a timeout or a busy server (429, 5xx) is tried up to four times per
