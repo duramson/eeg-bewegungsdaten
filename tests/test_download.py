@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import json
+import logging
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -10,6 +11,8 @@ import httpx
 import pytest
 
 from eeg_bewegungsdaten.download import (
+    ATTEMPTS,
+    RETRY_STATUS,
     ChecksumError,
     DownloadError,
     archive_path,
@@ -34,6 +37,14 @@ ZIP = zip_bytes({"Bewegungsdaten/Teil1.csv": b"EEG_Mastr_Nr;Monat\r\nEEG90000000
 @pytest.fixture
 def link() -> DownloadLink:
     return classified(URL)
+
+
+@pytest.fixture(autouse=True)
+def waits(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """The pauses before retries, recorded instead of waited for."""
+    pauses: list[float] = []
+    monkeypatch.setattr("eeg_bewegungsdaten.download.time.sleep", pauses.append)
+    return pauses
 
 
 class Server:
@@ -223,6 +234,93 @@ def test_http_errors_are_raised(tmp_path: Path, link: DownloadLink, status: int)
     assert leftovers(tmp_path) == []
 
 
+def once(first: httpx.Response | Exception) -> Server:
+    """Fails the first request with `first`, then serves the ZIP."""
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if len(server.requests) == 1:
+            if isinstance(first, Exception):
+                raise first
+            return first
+        return httpx.Response(200, content=ZIP)
+
+    server = Server(respond)
+    return server
+
+
+@pytest.mark.parametrize(
+    "first",
+    [
+        httpx.ReadError("connection reset"),
+        httpx.ReadTimeout("timed out"),
+        httpx.RemoteProtocolError("peer closed connection"),
+        httpx.Response(503, text="busy"),
+        httpx.Response(429, text="slow down", headers={"Retry-After": "0"}),
+    ],
+    ids=["read-error", "read-timeout", "protocol-error", "503", "429"],
+)
+def test_transient_error_is_retried(
+    tmp_path: Path, link: DownloadLink, waits: list[float], first: httpx.Response | Exception
+) -> None:
+    server = once(first)
+
+    with server.client() as client:
+        result = download(link, tmp_path, client)
+
+    assert result.path.read_bytes() == ZIP
+    assert len(server.requests) == 2
+    assert len(waits) == 1
+
+
+@pytest.mark.parametrize(("asked", "waited"), [("3", 3.0), ("600", 60.0)])
+def test_retry_after_is_honoured_up_to_a_limit(
+    tmp_path: Path, link: DownloadLink, waits: list[float], asked: str, waited: float
+) -> None:
+    server = once(httpx.Response(503, headers={"Retry-After": asked}))
+
+    with server.client() as client:
+        download(link, tmp_path, client)
+
+    assert waits == [waited]
+
+
+def test_persistent_error_fails_after_the_last_attempt(
+    tmp_path: Path, link: DownloadLink, waits: list[float]
+) -> None:
+    server = serve(b"busy", status=503)
+
+    with server.client() as client, pytest.raises(httpx.HTTPStatusError):
+        download(link, tmp_path, client)
+
+    assert len(server.requests) == ATTEMPTS
+    assert waits == [1.0, 2.0, 4.0]
+    assert leftovers(tmp_path) == []
+
+
+@pytest.mark.parametrize("status", [400, 403, 404, 410])
+def test_other_client_errors_are_not_retried(
+    tmp_path: Path, link: DownloadLink, waits: list[float], status: int
+) -> None:
+    server = serve(b"error", status=status)
+
+    with server.client() as client, pytest.raises(httpx.HTTPStatusError):
+        download(link, tmp_path, client)
+
+    assert len(server.requests) == 1
+    assert waits == []
+
+
+def test_retry_is_logged(
+    tmp_path: Path, link: DownloadLink, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="eeg_bewegungsdaten.download")
+
+    with once(httpx.Response(503)).client() as client:
+        download(link, tmp_path, client)
+
+    assert caplog.messages == [f"{URL}: HTTP 503, trying again in 1 s (attempt 2 of {ATTEMPTS})"]
+
+
 def test_new_upload_is_archived_next_to_the_old_one(tmp_path: Path, link: DownloadLink) -> None:
     newer = classified(
         URL.replace("0687a707-cf7c-45c1-29cf-08defc51206b", "aaaaaaaa-1111-2222-3333-444444444444")
@@ -379,7 +477,8 @@ def test_only_404_leads_to_the_wayback_copy(tmp_path: Path, status: int) -> None
     with server.client() as client, pytest.raises(httpx.HTTPStatusError):
         download(with_copy(), tmp_path, client)
 
-    assert requested(server) == [LIVE_2022]
+    # A 5xx is tried again on the same URL, but never leads to the Wayback copy
+    assert requested(server) == [LIVE_2022] * (ATTEMPTS if status in RETRY_STATUS else 1)
     assert leftovers(tmp_path) == []
 
 
