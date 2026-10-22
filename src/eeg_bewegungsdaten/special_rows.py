@@ -1,6 +1,6 @@
 """Rows whose amounts need care when you add them up, marked in the column `sonderzeile`.
 
-The kinds are recognised by the start or end of `verguetungskategorie`. The rules hold for 2016
+The kinds are recognised by the start or end of `verguetungskategorie`. The rules hold for 2011
 to 2025, where no category fits two of them; a category of a later year may need a new rule.
 """
 

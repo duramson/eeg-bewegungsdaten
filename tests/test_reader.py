@@ -9,6 +9,7 @@ from eeg_bewegungsdaten.reader import iter_chunks, skipped_members, to_text
 from eeg_bewegungsdaten.schema import TEXT_SCHEMA, FormatError
 from tests.builders import HEADER, HEADER_AMPRION_EXTRA, HEADER_TENNET, csv, make_zip, row
 from tests.old_formats import (
+    HEADER_50HERTZ_2015,
     HEADER_2020,
     HEADER_AMPRION_2017,
     HEADER_TENNET_2023,
@@ -60,6 +61,21 @@ def test_txt_file_is_read_when_the_zip_has_no_csv(tmp_path: Path) -> None:
     assert chunk.header[0] == '"EEG_Anlagenschlüssel"'
     assert chunk.columns[0] == "anlagenschluessel"
     assert chunk.frame["rohzeile"].to_list() == [line]
+    assert skipped_members(path) == []
+
+
+def test_bare_csv_file_is_read_as_one_member(tmp_path: Path) -> None:
+    """50Hertz 2014 and 2015: a CSV file instead of a ZIP."""
+    line = "1;10000086;Städtische Werke Musterstadt;E40000000000001;WiK71a------01;983840;89529,44;"
+    path = tmp_path / "50Hertz_Bewegungsdaten_2015[1].csv"
+    path.write_bytes(cp1252_csv(HEADER_50HERTZ_2015, line))
+
+    [chunk] = list(iter_chunks(path))
+
+    assert chunk.member == "50Hertz_Bewegungsdaten_2015[1].csv"
+    assert chunk.header[-1] == "VNNE [€]"
+    assert chunk.columns[1:3] == ["nb_bnr", "netzbetreiber"]
+    assert chunk.frame.select("zeile", "rohzeile", "cp1252").rows() == [(2, line, True)]
     assert skipped_members(path) == []
 
 

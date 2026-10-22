@@ -1,4 +1,4 @@
-"""Row counts of the real files of 2016 to 2025. Skipped unless pytest runs with --realdata.
+"""Row counts of the real files of 2007 to 2025. Skipped unless pytest runs with --realdata.
 
 Needs `eeg-bewegungsdaten download` first. Raw line counts come from an independent count of the
 lines in the ZIPs (header and lines without any value left out). The quarantine codes, MONAT_EMPTY
@@ -15,11 +15,228 @@ import pytest
 
 from eeg_bewegungsdaten.download import ArchivedFile, archived_files
 from eeg_bewegungsdaten.ingest import ingest, latest_uploads
-from eeg_bewegungsdaten.links import UENB, newest_known_year
+from eeg_bewegungsdaten.links import UENB, newest_known_year, older_links
 from eeg_bewegungsdaten.paths import default_data_dir
+from eeg_bewegungsdaten.reader import iter_chunks
 
 # (year, TSO): sha256 of the ZIPs in part order, raw lines, quarantine codes, qa_flags
 EXPECTED: dict[tuple[int, str], tuple[tuple[str, ...], int, dict[str, int], dict[str, int]]] = {
+    (2007, "50hertz"): (
+        ("3c6a4e745a19c6cafa6d77dcbc09137b884b57fb9fcf191b3e0d5011701973e3",),
+        29_635,
+        {},
+        {"ENCODING_CP1252": 13742},
+    ),
+    (2007, "amprion"): (
+        ("08a1af5d49fba3185774c7d9591d038e3efe74443327a4256de5129142766b60",),
+        215_806,
+        {},
+        {"ENCODING_CP1252": 80},
+    ),
+    (2007, "tennet"): (
+        ("dcee3ca548534714a2a0df9246ea8e30eae7ab0148d4bdda02164ed09aef93d1",),
+        207_825,
+        {},
+        {"ENCODING_CP1252": 16077},
+    ),
+    (2007, "transnetbw"): (
+        ("bfd3dd70dd6a8289f414ef8227213a66d4865c298cb5cf32bb404dc81c105154",),
+        80_112,
+        {},
+        {"ENCODING_CP1252": 20},
+    ),
+    (2008, "50hertz"): (
+        ("b522a6f7f884b26a7f13cd6d2b1b4288cefc2d5fc5577fcfe6a77f0edab48ee1",),
+        39_274,
+        {},
+        {"ENCODING_CP1252": 18491},
+    ),
+    (2008, "amprion"): (
+        ("8e1ae702d97d087daa1fc4b71db063c43d4002c536f454e0cf3a337913bab69c",),
+        277_130,
+        {},
+        {"ENCODING_CP1252": 112},
+    ),
+    (2008, "tennet"): (
+        ("244a8bb00b7f71f4d517283ecbaf239031d7fd24c31481af025dbe7729060c6a",),
+        413_632,
+        {},
+        {"ENCODING_CP1252": 41958},
+    ),
+    (2008, "transnetbw"): (
+        ("d49e337be012e4bc8014963ca45da4ce396031d89f7e8321a12f71036d2aa720",),
+        106_611,
+        {},
+        {"ENCODING_CP1252": 22},
+    ),
+    (2009, "50hertz"): (
+        ("9accab59a5962ced0b575d0cfc6a014df317f408b86521afb00c06b19f273ec4",),
+        53_208,
+        {},
+        {"ENCODING_CP1252": 24882},
+    ),
+    (2009, "amprion"): (
+        ("297505c8bd435a91f9a101c150d795f43cae59ade75da75df7226bd4ab4183b3",),
+        366_027,
+        {},
+        {"ENCODING_CP1252": 222},
+    ),
+    (2009, "tennet"): (
+        ("35b3a02e8be2f79ae1bb0a0b70e2ac744dd173f8ac3f6f46d80bfea2ea6d92e0",),
+        587_609,
+        {},
+        {"ENCODING_CP1252": 68712},
+    ),
+    (2009, "transnetbw"): (
+        ("1a81a4879dc587010937c3a4260fe9f08e55511379b107ff6478c038b081fe53",),
+        136_448,
+        {"BAD_NUMBER": 1},
+        {"ENCODING_CP1252": 23},
+    ),
+    (2010, "amprion"): (
+        ("28af6619e97ac5c278783a52a3575e8abdc889245e6d73af635cef8a803d7aaf",),
+        567_402,
+        {},
+        {"ENCODING_CP1252": 424},
+    ),
+    (2010, "tennet"): (
+        ("efbb2199c81d9564a53e397f0e7bea5ce97e6cb27f940158c3d6d2d5f99739aa",),
+        892_674,
+        {},
+        {"ENCODING_CP1252": 98638},
+    ),
+    (2010, "transnetbw"): (
+        ("9ffb71448d7f13f2d109d47930bf0dec3bd5ab129f596ed4b6103d12f65a862f",),
+        184_239,
+        {},
+        {"ENCODING_CP1252": 24},
+    ),
+    (2010, "50hertz"): (
+        ("c1a1037450a1b50bed03639fb0aa4e4c185710e60fcde52656c6c4b94c11917b",),
+        71987,
+        {},
+        {"ENCODING_CP1252": 33563},
+    ),
+    (2011, "50hertz"): (
+        ("a531528beb9921bdd1a1a6d8164c6c346456b776572db6190e0b9704ff652fdf",),
+        248899,
+        {},
+        {"ENCODING_CP1252": 33420},
+    ),
+    (2011, "transnetbw"): (
+        ("a43ee0a682b5411fa9492b2996a8aa49145da0ea5e4ca5109f6802ae05a7d867",),
+        505464,
+        {},
+        {"ENCODING_CP1252": 86685},
+    ),
+    (2012, "50hertz"): (
+        ("e3d5216ac07d3991d7d8a15c8d18114d9727125f8946866c0cc9aee8ef12aa37",),
+        395701,
+        {"BAD_NUMBER": 5},
+        {"ENCODING_CP1252": 316},
+    ),
+    (2012, "amprion"): (
+        ("b49271194abddac76d5e35d174ff411137605a31da660eac9b115521b7d570c6",),
+        670858,
+        {},
+        {"ENCODING_CP1252": 283},
+    ),
+    (2012, "transnetbw"): (
+        ("74696b4246033c417a873de45657846017a7a382c084bf9e659ebca07b98de8c",),
+        620865,
+        {},
+        {"ENCODING_CP1252": 108799},
+    ),
+    (2013, "50hertz"): (
+        ("92a68e1f00574d1341502aa40586e7f747be539b01a0f1399f095064cc6a4764",),
+        513438,
+        {"BAD_NUMBER": 31},
+        {"ENCODING_CP1252": 660},
+    ),
+    (2013, "amprion"): (
+        (
+            "ce69bac72aaddf8a0fae43b9e223a8b69b37e88bf5237cada52949954a3fadcb",
+            "7155e8e1723594653fc156e1711c8c4d409aeb63676d23874b82997fd2a44914",
+        ),
+        1254490,
+        {},
+        {"ENCODING_CP1252": 498},
+    ),
+    (2013, "transnetbw"): (
+        ("a5016c4734064dbdbe504e2d8024b0429d8c304b10b8866b25586750decb7a2a",),
+        684634,
+        {},
+        {"ENCODING_CP1252": 54548},
+    ),
+    (2014, "amprion"): (
+        (
+            "3d9685e67cee7b093298c640d777fe8c3026f3ab1d5b7303e5b2c8f005261b9d",
+            "72174b96c732d5b49bddeea89efbf00cb14c44b5dc06a6f3233ac6f9ca2eabed",
+        ),
+        1301868,
+        {},
+        {"NO_PLANT_ID": 1},
+    ),
+    (2014, "transnetbw"): (
+        ("35887d88f7388ceb13ece8e4ebbfe4b33da57d384300ad1872a10db973d63b7d",),
+        732363,
+        {},
+        {"ENCODING_CP1252": 42057},
+    ),
+    (2015, "transnetbw"): (
+        ("57168a6ecfbd3cde2be9620dd6a28053a16c690367110dac2c2bd74f989550f5",),
+        753572,
+        {},
+        {"ENCODING_CP1252": 42681},
+    ),
+    (2011, "amprion"): (
+        ("062ceb3a1c6d122d51aa4e113ddb2d74479aabc9e54d36cd6648d69730decbb7",),
+        801_547,
+        {"FIELD_COUNT": 8},
+        {"ENCODING_CP1252": 276_415},
+    ),
+    (2011, "tennet"): (
+        ("2d136855331435cc066b9387881b5aab00ac7b11ea8903e0d68ec7a592fbf9d4",),
+        1_226_229,
+        {},
+        {"ENCODING_CP1252": 110_880},
+    ),
+    (2012, "tennet"): (
+        ("edd993727c9fb808a43bca547961c3d364a3d5b638241f08a6436a07a782a183",),
+        1_620_764,
+        {},
+        {"ENCODING_CP1252": 178_113},
+    ),
+    (2013, "tennet"): (
+        ("5c304f8bba7c6587deb60910a2da8057e43b57335e9f47f3372691ba17fc0b55",),
+        1_828_808,
+        {},
+        {"ENCODING_CP1252": 108_734},
+    ),
+    (2014, "50hertz"): (
+        ("d99f184455a6eedbcad186d63ac3361120cf3ea5dd79de22c15dabd5c9cde3fa",),
+        567_565,
+        {},
+        {},
+    ),
+    (2014, "tennet"): (
+        ("defe974361c81c62788a79288866a9fc4d3680e78f34d335958fd3581aae0eba",),
+        1_947_532,
+        {},
+        {},
+    ),
+    (2015, "50hertz"): (
+        ("4ccfafa9c85c9b80d653a22e4a3e88aa6df19b3c7fe6756f212bfd870ab09561",),
+        614_756,
+        {"BAD_NUMBER": 1},
+        {"ENCODING_CP1252": 74_162},
+    ),
+    (2015, "tennet"): (
+        ("9cce08910cf6673d37a90adb046ec79db9da2dd6eac1cba690391b729fddac00",),
+        2_022_732,
+        {},
+        {"ENCODING_CP1252": 238_075},
+    ),
     (2016, "50hertz"): (
         ("b73a773dafa9373a87ccc1333f69790ed03d1d543b8eb51d19268ed786203450",),
         551_649,
@@ -415,7 +632,71 @@ def test_superseded_uploads_give_the_reference_counts(
     check_reference_counts(files, tmp_path, raw, quarantine, flags)
 
 
+def test_every_file_before_2016_has_reference_counts() -> None:
+    earlier = {(link.year, link.uenb) for link in older_links() if link.year and link.year < 2016}
+
+    assert {key for key in EXPECTED if key[0] < 2016} == earlier
+
+
 def test_every_year_and_tso_from_2016_has_reference_counts() -> None:
-    assert sorted(EXPECTED) == [
+    assert [key for key in sorted(EXPECTED) if key[0] >= 2016] == [
         (jahr, uenb) for jahr in range(2016, newest_known_year() + 1) for uenb in UENB
     ]
+
+
+# Counts made independently from the extracted bytes, excluding headers and blank lines.
+ZENODO_ROWS: dict[str, int] = {
+    "PaymentRegister/Transnet/Original files/2011.csv": 505_464,
+    "PaymentRegister/Transnet/Original files/2012.csv": 620_865,
+    "PaymentRegister/Transnet/Original files/2013.csv": 684_634,
+    "PaymentRegister/Transnet/Original files/2014.csv": 732_363,
+    "PaymentRegister/Transnet/Original files/2015.csv": 753_572,
+    "PaymentRegister/Hertz/Original files/2010.csv": 71_987,
+    "PaymentRegister/Hertz/Original files/2011.csv": 248_899,
+    "PaymentRegister/Hertz/Original files/2012.csv": 395_701,
+    "PaymentRegister/Hertz/Original files/2013.csv": 513_438,
+    "PaymentRegister/Amprion/Original files/Bewegungsdaten_2012/2012_a.txt": 670_858,
+    (
+        "PaymentRegister/Amprion/Original files/Bewegungsdaten_2013/"
+        "Internet_Bewegungsdaten_VNNE_2013.csv"
+    ): 427_792,
+    (
+        "PaymentRegister/Amprion/Original files/Bewegungsdaten_2014/Bewegungsdaten_VGT_DV_2014.csv"
+    ): 848_323,
+    (
+        "PaymentRegister/Amprion/Original files/Bewegungsdaten_2014/Bewegungsdaten_VNNE_2014.csv"
+    ): 453_545,
+    "PaymentRegister/Transnet/Original files/2007.csv": 80_112,
+    "PaymentRegister/Transnet/Original files/2008.csv": 106_611,
+    "PaymentRegister/Transnet/Original files/2009.csv": 136_448,
+    "PaymentRegister/Transnet/Original files/2010.csv": 184_239,
+    "PaymentRegister/Tennet/Original files/2007.csv": 207_825,
+    "PaymentRegister/Tennet/Original files/2008.csv": 413_632,
+    "PaymentRegister/Tennet/Original files/2009.csv": 587_609,
+    "PaymentRegister/Tennet/Original files/2010.csv": 892_674,
+    "PaymentRegister/Hertz/Original files/2007.csv": 29_635,
+    "PaymentRegister/Hertz/Original files/2008.csv": 39_274,
+    "PaymentRegister/Hertz/Original files/2009.csv": 53_208,
+    "PaymentRegister/Amprion/Original files/Bewegungsdaten_2007/2007_a.txt": 215_806,
+    "PaymentRegister/Amprion/Original files/Bewegungsdaten_2008/2008_a.txt": 277_130,
+    "PaymentRegister/Amprion/Original files/Bewegungsdaten_2009/2009_a.txt": 366_027,
+    "PaymentRegister/Amprion/Original files/Bewegungsdaten_2010/2010_a.txt": 567_402,
+}
+
+
+def test_every_zenodo_member_has_reference_counts() -> None:
+    assert {link.zip_member for link in older_links() if link.zip_member} == set(ZENODO_ROWS)
+
+
+@pytest.mark.realdata
+@pytest.mark.parametrize("member", ZENODO_ROWS)
+def test_each_zenodo_member_has_its_reference_row_count(member: str) -> None:
+    link = next(link for link in older_links() if link.zip_member == member)
+    files = [
+        file
+        for file in archived_files(default_data_dir())
+        if file.meta.get("zip_member") == member and file.meta["sha256"] == link.sha256
+    ]
+    if not files:
+        pytest.skip(f"{member} not downloaded or changed upstream")
+    assert sum(chunk.frame.height for chunk in iter_chunks(files[0].path)) == ZENODO_ROWS[member]

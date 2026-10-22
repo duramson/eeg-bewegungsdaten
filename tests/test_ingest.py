@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+import hashlib
 import json
 from pathlib import Path
 
@@ -13,7 +14,7 @@ import eeg_bewegungsdaten
 from eeg_bewegungsdaten import cli
 from eeg_bewegungsdaten.download import ArchivedFile, download, meta_path
 from eeg_bewegungsdaten.ingest import ingest, latest_uploads, scan
-from eeg_bewegungsdaten.links import PAGE_URL, find_links
+from eeg_bewegungsdaten.links import PAGE_URL, find_links, older_links
 from eeg_bewegungsdaten.paths import output_paths
 from eeg_bewegungsdaten.quality import check
 from eeg_bewegungsdaten.schema import CLEAN_SCHEMA, QUARANTINE_SCHEMA, TEXT_SCHEMA, FormatError
@@ -22,12 +23,19 @@ from tests.builders import (
     HEADER_TRANSNETBW_1,
     TENNET_PART,
     archive,
+    archive_body,
     classified,
     csv,
     row,
     zip_bytes,
 )
-from tests.old_formats import HEADER_2017, HEADER_2020, cp1252_csv, row_2020
+from tests.old_formats import (
+    HEADER_50HERTZ_2014,
+    HEADER_2017,
+    HEADER_2020,
+    cp1252_csv,
+    row_2020,
+)
 
 
 @pytest.fixture
@@ -128,6 +136,30 @@ def test_clean_rows_can_be_rebuilt_from_the_text_layer(
 
     assert clean.equals(pl.read_parquet(outputs.clean))
     assert quarantine.drop("rohzeile").equals(pl.read_parquet(outputs.quarantine).drop("rohzeile"))
+
+
+def test_bare_csv_file_before_2016_is_read_like_a_zip(data_dir: Path) -> None:
+    body = csv(
+        HEADER_50HERTZ_2014,
+        "Netz GmbH;E40000000000001;SoK81a------01;8248;4175,14;0",
+        "Netz GmbH;E40000000000001;So-vNNe--SpE07;0;0;12,5",
+        bom=True,
+    )
+    catalog = next(link for link in older_links() if link.filename == "EEG_JEA_2014.csv")
+    link = dataclasses.replace(catalog, sha256=hashlib.sha256(body).hexdigest())
+    archived = archive_body(data_dir, link, body)
+
+    report = ingest(archived, data_dir)
+
+    assert (report["jahr"], report["uenb"]) == (2014, "50hertz")
+    assert report["rows"] == {"raw": 2, "clean": 2, "quarantine": 0}
+    assert [m["name"] for m in report["members"]] == ["EEG_JEA_2014.csv"]
+    assert report["skipped_members"] == []
+    assert report["sums_clean"]["vermiedene_netzentgelte"] == 12.5
+    clean = pl.read_parquet(report["outputs"]["clean"])
+    assert clean["netzbetreiber"].to_list() == ["Netz GmbH"] * 2
+    assert clean["nb_bnr"].to_list() == [None, None]
+    assert clean["quelldatei"].to_list() == ["EEG_JEA_2014.csv"] * 2
 
 
 def test_ingest_leaves_no_temporary_files(data_dir: Path) -> None:
@@ -513,3 +545,45 @@ def test_ingest_refuses_duplicate_parts(data_dir: Path) -> None:
 
     with pytest.raises(FormatError, match="duplicate upload parts"):
         ingest([part, part], data_dir)
+
+
+def test_amprion_payment_and_fee_files_form_one_complete_upload(data_dir: Path) -> None:
+    from tests.test_zip_range import range_response
+
+    links = [link for link in older_links() if (link.year, link.uenb) == (2013, "amprion")]
+    assert [link.part for link in links] == [1, 2]
+    files = []
+    for link in links:
+        header = "ANLAGENSCHLUESSEL;VERGUETUNGSKATEGORIE;MENGE [KWH];BETRAG [EURO]"
+        data = csv(header, "E900001;So-vNNe-----13;100;12,5")
+        if link.zip_member:
+            link = dataclasses.replace(
+                link, size=len(data), sha256=hashlib.sha256(data).hexdigest()
+            )
+            assert link.zip_member is not None
+            body = zip_bytes({link.zip_member: data})
+            with httpx.Client(
+                transport=httpx.MockTransport(lambda r, body=body: range_response(r, body))
+            ) as http:
+                files.append(download(link, data_dir, http))
+        else:
+            body = zip_bytes({"payments.csv": data})
+            link = dataclasses.replace(link, sha256=hashlib.sha256(body).hexdigest())
+            files.append(archive_body(data_dir, link, body))
+
+    with pytest.raises(FormatError, match="Incomplete"):
+        ingest(files[:1], data_dir)
+    with pytest.raises(FormatError, match="Incomplete"):
+        ingest(files[1:], data_dir)
+
+    assert [[f.path for f in upload] for upload in latest_uploads(data_dir)] == [
+        [f.path for f in files]
+    ]
+    report = ingest(files, data_dir)
+    assert report["rows"] == {"raw": 2, "clean": 2, "quarantine": 0}
+    assert report["sums_clean"]["eeg_zahlung"] == 12.5
+    assert report["sums_clean"]["vermiedene_netzentgelte"] == 12.5
+    assert report["sources"][1]["doi"] == links[1].doi
+    files[1].path.unlink()
+    with pytest.raises(FormatError, match="missing"):
+        ingest(latest_uploads(data_dir)[0], data_dir)

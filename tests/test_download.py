@@ -20,7 +20,8 @@ from eeg_bewegungsdaten.download import (
     verify,
 )
 from eeg_bewegungsdaten.links import PAGE_URL, DownloadLink, find_links, older_links
-from tests.builders import PAGE, TENNET_PART, classified, zip_bytes
+from tests.builders import PAGE, TENNET_PART, classified, csv, zip_bytes
+from tests.old_formats import HEADER_50HERTZ_2014
 
 URL = (
     "https://www.netztransparenz.de/cdn/files/0687a707-cf7c-45c1-29cf-08defc51206b/"
@@ -29,11 +30,26 @@ URL = (
 
 
 ZIP = zip_bytes({"Bewegungsdaten/Teil1.csv": b"EEG_Mastr_Nr;Monat\r\nEEG900000000001;0\r\n"})
+CSV = csv(HEADER_50HERTZ_2014, "Netz GmbH;E40000000000001;SoK81a------01;8248;4175,14;0", bom=True)
 
 
 @pytest.fixture
 def link() -> DownloadLink:
     return classified(URL)
+
+
+def wayback_only(body: bytes, filename: str = "EEG_JEA_2014.csv") -> DownloadLink:
+    """A file before 2016, which only the Wayback Machine has: its SHA-256 is recorded."""
+    return DownloadLink(
+        "https://web.archive.org/web/20180201020739id_/http://www.50hertz.com/x/" + filename,
+        filename,
+        "bewegungsdaten",
+        "50hertz",
+        2014,
+        None,
+        listed=False,
+        sha256=hashlib.sha256(body).hexdigest(),
+    )
 
 
 class Server:
@@ -166,6 +182,41 @@ def test_corrupt_zip_is_not_archived(tmp_path: Path, link: DownloadLink) -> None
     server = serve(bytes(damaged))
 
     with server.client() as client, pytest.raises(DownloadError):
+        download(link, tmp_path, client)
+
+    assert leftovers(tmp_path) == []
+
+
+def test_bare_csv_is_archived_with_its_header_checked(tmp_path: Path) -> None:
+    server = serve(CSV)
+
+    with server.client() as client:
+        archived = download(wayback_only(CSV), tmp_path, client)
+
+    assert archived.path.name == "EEG_JEA_2014.csv"
+    assert archived.path.read_bytes() == CSV
+    assert archived.meta["sha256"] == hashlib.sha256(CSV).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "body", [b"<html>Wartungsarbeiten</html>", b"\xef\xbb\xbf<!DOCTYPE html>", b"x;y", b""]
+)
+def test_html_page_or_empty_file_is_not_archived_as_csv(tmp_path: Path, body: bytes) -> None:
+    server = serve(body if body != b"x;y" else b"a single line")
+
+    with server.client() as client, pytest.raises(DownloadError, match="not a CSV"):
+        download(wayback_only(server.respond(httpx.Request("GET", "x")).content), tmp_path, client)
+
+    assert leftovers(tmp_path) == []
+
+
+@pytest.mark.parametrize("filename", ["EEG_JEA_2014.csv", "Bewegungsdaten_Internet.zip"])
+def test_wayback_only_copy_must_have_the_recorded_sha256(tmp_path: Path, filename: str) -> None:
+    body = CSV if filename.endswith(".csv") else ZIP
+    server = serve(body)
+    link = dataclasses.replace(wayback_only(body, filename), sha256="0" * 64)
+
+    with server.client() as client, pytest.raises(DownloadError, match="SHA-256"):
         download(link, tmp_path, client)
 
     assert leftovers(tmp_path) == []
@@ -457,3 +508,65 @@ def test_cached_download_records_newly_discovered_parts(tmp_path: Path, link: Do
     assert not again.downloaded
     assert third.meta["expected_parts"] == [1, 2]
     assert json.loads(meta_path(first.path).read_text(encoding="utf-8"))["expected_parts"] == [1, 2]
+
+
+def test_zip_member_is_archived_with_its_doi_and_member_path(tmp_path: Path) -> None:
+    from tests.test_zip_range import range_response
+
+    link = next(link for link in older_links() if link.zip_member)
+    link = dataclasses.replace(link, size=len(CSV), sha256=hashlib.sha256(CSV).hexdigest())
+    assert link.zip_member
+    body = zip_bytes({link.zip_member: CSV})
+    server = Server(lambda request: range_response(request, body))
+    with server.client() as client:
+        result = download(link, tmp_path, client)
+
+    assert result.path.read_bytes() == CSV
+    assert result.meta["doi"] == "10.5281/zenodo.8010410"
+    assert result.meta["zip_member"] == link.zip_member
+    assert result.meta["size"] == len(CSV)
+    assert result.meta["sha256"] == hashlib.sha256(CSV).hexdigest()
+    assert result.meta["page_url"] is None
+    verify(result)
+
+
+@pytest.mark.parametrize("damage", ["hash", "size", "missing", "range"])
+def test_invalid_zip_member_leaves_no_finished_archive(tmp_path: Path, damage: str) -> None:
+    from tests.test_zip_range import range_response
+
+    link = next(link for link in older_links() if link.zip_member)
+    link = dataclasses.replace(link, size=len(CSV), sha256=hashlib.sha256(CSV).hexdigest())
+    assert link.zip_member
+    body = zip_bytes({"other.csv" if damage == "missing" else link.zip_member: CSV})
+    if damage == "hash":
+        link = dataclasses.replace(link, sha256="0" * 64)
+    if damage == "size":
+        link = dataclasses.replace(link, size=len(CSV) + 1)
+    server = Server(
+        lambda request: (
+            httpx.Response(200, content=body)
+            if damage == "range"
+            else range_response(request, body)
+        )
+    )
+    with server.client() as client, pytest.raises(DownloadError):
+        download(link, tmp_path, client)
+    assert leftovers(tmp_path) == []
+
+
+def test_implausibly_large_compressed_member_is_rejected_before_reading_it(tmp_path: Path) -> None:
+    import struct
+
+    from tests.test_zip_range import range_response
+
+    link = next(link for link in older_links() if link.zip_member)
+    link = dataclasses.replace(link, size=len(CSV), sha256=hashlib.sha256(CSV).hexdigest())
+    assert link.zip_member
+    body = bytearray(zip_bytes({link.zip_member: CSV}))
+    central = body.index(b"PK\x01\x02")
+    struct.pack_into("<L", body, central + 20, 1_000_000)
+    server = Server(lambda request: range_response(request, bytes(body)))
+    with server.client() as client, pytest.raises(DownloadError, match="size bound"):
+        download(link, tmp_path, client)
+    assert len(server.requests) == 1
+    assert leftovers(tmp_path) == []

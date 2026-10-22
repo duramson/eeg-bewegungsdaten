@@ -8,11 +8,12 @@ server folder. On the CDN each part has its own id, so the folder is named after
 URLs of all parts.
 
 A file counts as downloaded only once its metadata file exists. Data arrive in a ``.part`` file
-that is renamed after the size and the ZIP structure have been checked, so an aborted download
-never looks finished.
+that is renamed after the size and the structure (ZIP, or the header line of a bare CSV) have
+been checked, so an aborted download never looks finished.
 
 When the server answers 404 for a file with a Wayback copy (`DownloadLink.fallback_url`), the
 copy is downloaded instead, into the same place. It must have the SHA-256 recorded in the link.
+So must a file whose `url` is a Wayback copy without a fallback (the files before 2016).
 """
 
 from __future__ import annotations
@@ -22,6 +23,8 @@ import json
 import logging
 import os
 import zipfile
+import zlib
+from contextlib import ExitStack
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -32,6 +35,7 @@ from eeg_bewegungsdaten._version import __version__
 from eeg_bewegungsdaten.http import new_client
 from eeg_bewegungsdaten.links import PAGE_URL, DownloadLink
 from eeg_bewegungsdaten.paths import raw_dir, utc_now, write_json
+from eeg_bewegungsdaten.zip_range import RangeFile
 
 log = logging.getLogger(__name__)
 
@@ -61,7 +65,9 @@ def archive_path(data_dir: Path, link: DownloadLink) -> Path:
         or any(c in link.filename for c in ("/", "\\", "\0"))
     ):
         raise DownloadError(f"Invalid download filename: {link.filename!r}")
-    if link.part is not None and link.file_id:
+    if link.upload_id:
+        file_id = _short_hash(link.upload_id)
+    elif link.part is not None and link.file_id:
         file_id = _short_hash("\n".join(link.part_urls or (link.url,)))
     elif link.file_id:
         file_id = link.file_id
@@ -133,8 +139,11 @@ def download(
 
 
 def _fetch_or_fall_back(http: httpx.Client, link: DownloadLink, path: Path) -> dict[str, Any]:
+    # The recorded SHA-256 guards the Wayback copy: the fallback, or `url` itself when it is the
+    # only copy. A file on the server is archived as the server sends it.
+    only_copy = link.fallback_url is None
     try:
-        return _fetch(http, link, path, link.url)
+        return _fetch(http, link, path, link.url, sha256=link.sha256 if only_copy else None)
     except httpx.HTTPStatusError as e:
         if e.response.status_code != 404 or link.fallback_url is None:
             raise
@@ -150,27 +159,60 @@ def _fetch(
     digest = hashlib.sha256()
     size = 0
     try:
-        with http.stream("GET", url) as response:
-            response.raise_for_status()
-            expected = response.headers.get("Content-Length")
+        with ExitStack() as stack:
+            expected: int | None
+            response = None
+            if link.zip_member is not None:
+                if link.size is None or sha256 is None or link.doi is None:
+                    raise DownloadError(f"{url}: ZIP member needs size, SHA-256 and DOI")
+                remote = stack.enter_context(RangeFile(http, url))
+                archive = stack.enter_context(zipfile.ZipFile(remote))
+                matches = [i for i in archive.infolist() if i.filename == link.zip_member]
+                if len(matches) != 1:
+                    raise DownloadError(f"{url}: expected one ZIP member {link.zip_member!r}")
+                info = matches[0]
+                if info.file_size != link.size:
+                    raise DownloadError(
+                        f"{url}: member size {info.file_size}, expected {link.size}"
+                    )
+                if info.compress_size > max(1024, link.size * 2):
+                    raise DownloadError(f"{url}: compressed member exceeds its size bound")
+                if info.flag_bits & 1 or info.compress_type not in (0, 8):
+                    raise DownloadError(f"{url}: unsupported ZIP member compression or encryption")
+                member = stack.enter_context(archive.open(info))
+                chunks = iter((member.read(),))
+                expected = link.size
+                headers = remote.headers
+                source_url = remote.source_url
+            else:
+                response = stack.enter_context(http.stream("GET", url))
+                response.raise_for_status()
+                length = response.headers.get("Content-Length")
+                expected = int(length) if length is not None else None
+                chunks = response.iter_bytes(CHUNK_SIZE)
+                headers = response.headers
+                source_url = str(response.url)
             with part.open("wb") as f:
-                for chunk in response.iter_bytes(CHUNK_SIZE):
+                for chunk in chunks:
                     f.write(chunk)
                     digest.update(chunk)
                     size += len(chunk)
                 f.flush()
                 os.fsync(f.fileno())
-            headers = response.headers
             # Content-Length counts the bytes on the wire, before any Content-Encoding.
             encoded = headers.get("Content-Encoding", "identity") != "identity"
-            received = response.num_bytes_downloaded if encoded else size
-            if expected is not None and int(expected) != received:
+            received = response.num_bytes_downloaded if response is not None and encoded else size
+            if expected is not None and expected != received:
                 raise DownloadError(f"{url}: got {received} of {expected} bytes")
-            source_url = str(response.url)
         if sha256 is not None and digest.hexdigest() != sha256:
             raise DownloadError(f"{url}: SHA-256 {digest.hexdigest()}, expected {sha256}")
-        _check_zip(part, url)
+        if link.filename.lower().endswith((".csv", ".txt")):
+            _check_csv(part, url)
+        else:
+            _check_zip(part, url)
         part.replace(path)
+    except (zipfile.BadZipFile, zlib.error) as e:
+        raise DownloadError(f"{url}: invalid ZIP member ({e})") from e
     finally:
         part.unlink(missing_ok=True)
 
@@ -195,6 +237,7 @@ def _fetch(
         "orig_last_modified": headers.get("X-Archive-Orig-Last-Modified"),
         "etag": headers.get("ETag"),
         "tool_version": __version__,
+        **({"doi": link.doi, "zip_member": link.zip_member} if link.zip_member else {}),
     }
 
 
@@ -207,6 +250,14 @@ def _check_zip(path: Path, url: str) -> None:
         raise DownloadError(f"{url}: not a ZIP file ({e})") from e
     if broken is not None:
         raise DownloadError(f"{url}: CRC error in {broken}")
+
+
+def _check_csv(path: Path, url: str) -> None:
+    """Bare CSV/TXT files need a header with separators; an HTML error page has none."""
+    with path.open("rb") as f:
+        first = f.readline(1 << 16)
+    if first.removeprefix(b"\xef\xbb\xbf").lstrip().startswith(b"<") or b";" not in first:
+        raise DownloadError(f"{url}: not a CSV file")
 
 
 def archived_files(data_dir: Path, *, include_incomplete: bool = False) -> list[ArchivedFile]:

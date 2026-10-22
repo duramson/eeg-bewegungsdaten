@@ -85,6 +85,8 @@ def check(text: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
         .list.eval(_unquote(pl.element()).filter(_unquote(pl.element()) != ""))
         .list.first(),
     )
+    # Zenodo's reshaped files use R's NA marker for missing amounts. Keep it in the text layer.
+    frame = frame.with_columns(pl.col(list(NUMBER_COLUMNS)).replace("NA", None))
     frame = frame.with_columns(_form=_veraeusserungsform_code(pl.col("veraeusserungsform")))
     frame = frame.with_columns(_code=_quarantine_code())
     frame = frame.with_columns(_detail=_quarantine_detail())
