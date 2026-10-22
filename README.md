@@ -478,8 +478,8 @@ payments = eeg_bewegungsdaten.scan().join(
 ### Add MaStR data
 
 Capacity, commissioning date, location and the other MaStR data come from the open-MaStR
-database by `mastr_eeg_nr`. For example, the capacity and the EEG commissioning date of PV
-plants:
+database by `eeg_mastr_nr_abgeglichen`. For example, the capacity and the EEG commissioning
+date of PV plants:
 
 ```python
 import sqlite3
@@ -501,7 +501,7 @@ key = ["jahr", "uenb", "quelldatei", "zeile"]
 payments = (
     eeg_bewegungsdaten.scan()
     .join(pl.scan_parquet("~/.eeg-bewegungsdaten/mastr/*/*.parquet"), on=key, how="left")
-    .join(solar.lazy(), left_on="mastr_eeg_nr", right_on="EegMastrNummer", how="left")
+    .join(solar.lazy(), left_on="eeg_mastr_nr_abgeglichen", right_on="EegMastrNummer", how="left")
 )
 ```
 
