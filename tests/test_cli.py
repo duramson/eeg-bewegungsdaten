@@ -1,16 +1,24 @@
 from __future__ import annotations
 
+import dataclasses
 import errno
 import io
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
 from rich.console import Console
 
 from eeg_bewegungsdaten import cli, display
-from eeg_bewegungsdaten.links import PAGE_URL, older_links, parse_links
+from eeg_bewegungsdaten.links import (
+    PAGE_URL,
+    DownloadLink,
+    find_links,
+    older_links,
+    parse_links,
+)
 from tests.builders import PAGE, zip_bytes
 
 # The older files that `find_links` adds to the page
@@ -18,10 +26,20 @@ OLDER = older_links(parse_links(PAGE))
 
 
 def serve_page(
-    monkeypatch: pytest.MonkeyPatch, failing: Callable[[str], bool] = lambda url: False
+    monkeypatch: pytest.MonkeyPatch,
+    failing: Callable[[str], bool] = lambda url: False,
+    *,
+    recorded: bool = False,
 ) -> list[str]:
     """Serve the fixture page and a tiny ZIP for every file link, or 429 for the `failing` ones;
-    return the list of requested URLs."""
+    return the list of requested URLs. The tiny ZIP has other bytes than the files recorded in
+    `OLDER_FILES`, so their SHA-256 is left out unless `recorded`."""
+    if not recorded:
+
+        def unrecorded(*args: Any, **kwargs: Any) -> list[DownloadLink]:
+            return [dataclasses.replace(link, sha256=None) for link in find_links(*args, **kwargs)]
+
+        monkeypatch.setattr("eeg_bewegungsdaten.cli.find_links", unrecorded)
     seen: list[str] = []
     body = zip_bytes({"a.csv": b"x\r\n"})
 
@@ -171,6 +189,26 @@ def test_download_stops_when_the_disk_is_full(
     # The line of the file, and again in the summary
     assert capsys.readouterr().err.count("No space left on device") == 2
     assert caplog.messages.count("The disk is full; the other files are not downloaded") == 1
+
+
+def test_download_reports_files_with_other_bytes_than_recorded(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The server sends other bytes than `OLDER_FILES` records: archived, but reported."""
+    serve_page(monkeypatch, recorded=True)
+
+    args = ["--data-dir", str(tmp_path), "download", "--year", "2022", "--uenb", "amprion"]
+    assert cli.main(args) == 1
+
+    lines = capsys.readouterr().err.splitlines()
+    row = next(row for row in lines if row.startswith("✓ 2022 amprion"))
+    assert ", recorded 6256d028e3d8" in row
+    assert lines[lines.index("") + 1].startswith("✗ Finished with changed files ")
+    # The legends of the page and of 2022 to 2024 have recorded SHA-256 too
+    changed = summary(lines, "Changed")
+    assert changed.startswith("legend, 2022 amprion, legend, legend: ")
+    assert changed.endswith(": other bytes than recorded, archived as now")
+    assert len(list((tmp_path / "raw" / "2022" / "amprion").rglob("*.zip"))) == 1
 
 
 def test_download_twice_lists_the_archived_files(

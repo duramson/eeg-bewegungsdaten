@@ -13,6 +13,9 @@ never looks finished. A broken connection, a timeout, 429 and 5xx are tried agai
 
 When the server answers 404 for a file with a Wayback copy (`DownloadLink.fallback_url`), the
 copy is downloaded instead, into the same place. It must have the SHA-256 recorded in the link.
+A file from the server itself with other bytes than recorded is archived all the same, as the
+TSO may have replaced it, with a warning and the recorded SHA-256 as ``expected_sha256`` in its
+metadata.
 """
 
 from __future__ import annotations
@@ -155,10 +158,22 @@ def _fetch_or_fall_back(
     http: httpx.Client, link: DownloadLink, path: Path, progress: Progress | None
 ) -> dict[str, Any]:
     try:
-        return _retrying(link.url, lambda: _fetch(http, link, path, link.url, progress=progress))
+        meta = _retrying(link.url, lambda: _fetch(http, link, path, link.url, progress=progress))
     except httpx.HTTPStatusError as e:
         if e.response.status_code != 404 or link.fallback_url is None:
             raise
+    else:
+        if link.sha256 is not None and meta["sha256"] != link.sha256:
+            # Kept, as it is what the TSO publishes now, but not without a word.
+            log.warning(
+                "%s has other bytes than recorded: SHA-256 %s, expected %s. The TSO may have "
+                "replaced the file; it is archived as it is now.",
+                link.url,
+                meta["sha256"],
+                link.sha256,
+            )
+            meta["expected_sha256"] = link.sha256
+        return meta
     log.warning("%s answers 404, downloading the Wayback copy %s", link.url, link.fallback_url)
     fallback = link.fallback_url
     return _retrying(
