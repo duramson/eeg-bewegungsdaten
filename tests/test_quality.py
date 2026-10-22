@@ -326,6 +326,8 @@ def test_unknown_veraeusserungsform_goes_to_quarantine(tmp_path: Path, value: st
         ("payment", "12,5 €"),
         ("income", "NaN"),
         ("income", "1,"),
+        ("energy", "１２３,４５"),  # noqa: RUF001  # digits outside ASCII
+        ("energy", "9" * 400),  # infinity as a float
     ],
 )
 def test_unreadable_number_goes_to_quarantine(tmp_path: Path, column: str, value: str) -> None:

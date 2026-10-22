@@ -27,7 +27,7 @@ QUARANTINE_CODES = {
     "UNDECODABLE": "line is neither UTF-8 nor cp1252",
     "FIELD_COUNT": "number of fields differs from the header",
     "BAD_VERAEUSSERUNGSFORM": "Veraeusserungsform is empty, or neither 1 to 5 nor a known text",
-    "BAD_NUMBER": "an amount (Strommenge, EEG_Zahlung, ...) is not a decimal number",
+    "BAD_NUMBER": "an amount (Strommenge, EEG_Zahlung, ...) is not a finite decimal number",
 }
 
 QA_FLAGS = {
@@ -51,8 +51,9 @@ _UNIT = r"^SEE\d{12}$"
 _SNB = r"^SNB\d{12}$"
 # Decimal comma, optionally with thousands separators (50Hertz 2020, TransnetBW 2021, Amprion 2017)
 # or a negative exponent (Amprion 2018 and 2019: rounding noise like '3,9886E-06'). A positive
-# exponent means that Excel cut off digits, so the value stays unreadable.
-_NUMBER = r"^-?(?:\d+|[1-9]\d{0,2}(?:\.\d{3})+)(?:,\d+)?(?:[eE]-\d+)?$"
+# exponent means that Excel cut off digits, so the value stays unreadable. ASCII digits only: `\d`
+# would also take other digits, such as fullwidth ones, which the conversion to float rejects.
+_NUMBER = r"^-?(?:[0-9]+|[1-9][0-9]{0,2}(?:\.[0-9]{3})+)(?:,[0-9]+)?(?:[eE]-[0-9]+)?$"
 # Leading zero: Amprion 2021 writes '09' in 54 rows.
 _MONAT = r"^(?:0?\d|1[0-2])$"
 
@@ -131,10 +132,12 @@ def _veraeusserungsform_code(expr: pl.Expr) -> pl.Expr:
 
 
 def _to_float(expr: pl.Expr) -> pl.Expr:
+    """The amount as a float; null if it does not parse. Only lines that pass `_bad_number` reach
+    the clean layer."""
     return (
         expr.str.replace_all(".", "", literal=True)
         .str.replace(",", ".", literal=True)
-        .cast(pl.Float64)
+        .cast(pl.Float64, strict=False)
     )
 
 
@@ -151,7 +154,10 @@ def _monat(expr: pl.Expr) -> pl.Expr:
 
 
 def _bad_number(column: str) -> pl.Expr:
-    return pl.col(column).is_not_null() & ~pl.col(column).str.contains(_NUMBER)
+    """Not a decimal number, or one too large for a float (400 digits would become infinity)."""
+    value = pl.col(column)
+    finite = _to_float(value).is_finite().fill_null(False)
+    return value.is_not_null() & ~(value.str.contains(_NUMBER) & finite)
 
 
 def _quarantine_code() -> pl.Expr:

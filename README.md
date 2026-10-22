@@ -293,7 +293,7 @@ A line goes to quarantine only if its values cannot be read:
 | `UNDECODABLE` | Line is neither UTF-8 nor cp1252 |
 | `FIELD_COUNT` | Number of fields differs from the header |
 | `BAD_VERAEUSSERUNGSFORM` | `Veraeusserungsform` is empty, or neither 1 to 5 nor one of the texts of 2020 to 2022 and Amprion 2018 |
-| `BAD_NUMBER` | An amount is not a decimal number with comma, e.g. `12.5` or `9,59E+11` (Excel cut off digits) |
+| `BAD_NUMBER` | An amount is not a decimal number with comma, e.g. `12.5` or `9,59E+11` (Excel cut off digits), or too large for a float |
 
 All other problems keep the row and add a code to `qa_flags`, so sums stay complete:
 
