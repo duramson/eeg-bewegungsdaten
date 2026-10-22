@@ -16,6 +16,7 @@ from rich.text import Text
 
 from eeg_bewegungsdaten import display
 from eeg_bewegungsdaten._version import __version__
+from eeg_bewegungsdaten.datapackage import Contributor
 from eeg_bewegungsdaten.download import (
     ArchivedFile,
     ChecksumError,
@@ -113,6 +114,16 @@ def _parser() -> argparse.ArgumentParser:
     share.add_argument("--year", type=int, action="append", help="only this year (repeatable)")
     share.add_argument(
         "--out", type=Path, default=None, help="output folder (default: export in the data folder)"
+    )
+    share.add_argument(
+        "--contributor",
+        metavar="NAME",
+        help="the person who publishes the export, for datapackage.json (default: none)",
+    )
+    share.add_argument(
+        "--contributor-url",
+        metavar="URL",
+        help="ORCID or profile of the contributor, e.g. https://orcid.org/0000-0000-0000-0000",
     )
     share.set_defaults(func=_export)
 
@@ -348,7 +359,17 @@ def _export(args: argparse.Namespace) -> int:
                 if i + 1 < len(years):
                     moves[0] = shown.start(years[i + 1].key)
 
-            export(data_dir, out_dir, args.year, progress=progress, on_year=on_year)
+            contributor = (
+                Contributor(args.contributor, args.contributor_url) if args.contributor else None
+            )
+            export(
+                data_dir,
+                out_dir,
+                args.year,
+                progress=progress,
+                on_year=on_year,
+                contributor=contributor,
+            )
     except ExportError as e:
         log.error("%s", e)
         return 1

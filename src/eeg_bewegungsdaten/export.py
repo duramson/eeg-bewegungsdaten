@@ -35,6 +35,7 @@ from typing import Any
 import polars as pl
 
 from eeg_bewegungsdaten._version import __version__
+from eeg_bewegungsdaten.datapackage import DATAPACKAGE_JSON, Contributor, datapackage
 from eeg_bewegungsdaten.links import PAGE_URL, UENB, UENB_NAMES
 from eeg_bewegungsdaten.mastr import HITS, MASTR_SCHEMA, MastrError, check_match, clean_files
 from eeg_bewegungsdaten.paths import (
@@ -120,11 +121,13 @@ def export(
     *,
     progress: Progress | None = None,
     on_year: Callable[[int, dict[str, Any]], None] | None = None,
+    contributor: Contributor | None = None,
 ) -> dict[str, Any]:
     """Write the export of `years` (default: every year with clean files) to `out_dir` (default:
     `export_dir`) and return the content of ``sources.json``. `ids_path` defaults to
     `anlage_id_path`. `progress` gets the clean files (years and TSOs) written so far and their
-    number; `on_year` gets each year and its summary as soon as its file is written."""
+    number; `on_year` gets each year and its summary as soon as its file is written.
+    `contributor`, the person who publishes the export, goes into ``datapackage.json``."""
     out_dir = out_dir or export_dir(data_dir)
     ids_path = ids_path or anlage_id_path(data_dir)
     if ids_path.resolve().is_relative_to(out_dir.resolve()):
@@ -204,6 +207,7 @@ def export(
         **_sources(data_dir, files),
     }
     write_json(out_dir / SOURCES_JSON, content)
+    write_json(out_dir / DATAPACKAGE_JSON, datapackage(content, EXPORT_SCHEMA, contributor))
     write_text(out_dir / SOURCES_TXT, _sources_text(content))
     return content
 

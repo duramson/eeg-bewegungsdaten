@@ -156,6 +156,7 @@ The data folder is `~/.eeg-bewegungsdaten`. Change it with the environment varia
 ├── export/eeg-bewegungsdaten-2025.parquet
 ├── export/sources.txt
 ├── export/sources.json
+├── export/datapackage.json
 └── anlage_id.parquet
 ```
 
@@ -490,6 +491,12 @@ uv run eeg-bewegungsdaten export
   `~/.eeg-bewegungsdaten/export/eeg-bewegungsdaten-<year>.parquet`.
 - `sources.txt` and `sources.json` hold the source notes for the EEG data and for the MaStR,
   with the date of the MaStR export. They also list the source files with their SHA-256.
+- `datapackage.json` describes the export in [OEMetadata v2](https://github.com/OpenEnergyPlatform/oemetadata),
+  the metadata standard of the Open Energy Platform, which builds on the Frictionless Data
+  Package: one resource per year with every column (type, unit, meaning, codes), its source
+  files and the licenses. The EEG data have no settled license, and it says so. It names no
+  person unless you give `--contributor "<name>"` and `--contributor-url <ORCID or profile>`,
+  for whoever publishes the export.
 - `--year 2025` exports only that year. `--out <folder>` writes to another folder. A folder
   with the export of other years is refused, so that the source notes always fit the files.
 - For all years it takes about 20 seconds and up to 4 GB of memory.
