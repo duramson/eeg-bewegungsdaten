@@ -775,9 +775,9 @@ class MastrDisplay(RunDisplay):
     def done_cells(self, item: Item) -> list[Text]:
         report = item.result
         rows = report["rows"]
-        bridge = report["treffer"]["ANLAGENSCHLUESSEL_BRUECKE"]["rows"]
+        bridge = report["treffer"]["ANLAGENSCHLUESSEL_BRIDGE"]["rows"]
         not_found = report["treffer"]["NOT_FOUND"]["rows"]
-        rate = report["trefferquote"]
+        rate = report["match_rate"]
         added = Text(
             f"{'+' + format(bridge, ','):>8} bridge", "eeg.accent" if bridge else "eeg.muted"
         )
@@ -807,15 +807,15 @@ class MastrDisplay(RunDisplay):
             line.append(f"{s}{matched / rows:.1%} matched")
         if paid:
             line.append(f"{s}{paid_matched / paid:.1%} of payments")
-        bridge_rows = sum(r["treffer"]["ANLAGENSCHLUESSEL_BRUECKE"]["rows"] for r in reports)
-        bridge_paid = sum(r["treffer"]["ANLAGENSCHLUESSEL_BRUECKE"]["eeg_zahlung"] for r in reports)
+        bridge_rows = sum(r["treffer"]["ANLAGENSCHLUESSEL_BRIDGE"]["rows"] for r in reports)
+        bridge_paid = sum(r["treffer"]["ANLAGENSCHLUESSEL_BRIDGE"]["eeg_zahlung"] for r in reports)
         bridge = Text(f"+{bridge_rows:,} rows", "eeg.accent" if bridge_rows else "")
         if rows:
             bridge.append(f" ({bridge_rows / rows:.1%}){s}{_euro(bridge_paid)}")
         by_year: dict[int, list[int]] = {}
         for r in reports:
             year = by_year.setdefault(int(r["jahr"]), [0, 0])
-            year[0] += r["treffer"]["ANLAGENSCHLUESSEL_BRUECKE"]["rows"]
+            year[0] += r["treffer"]["ANLAGENSCHLUESSEL_BRIDGE"]["rows"]
             year[1] += r["rows"]
         shares = [(y, b / n) for y, (b, n) in sorted(by_year.items()) if n and b / n >= 0.005]
         if shares:
@@ -886,7 +886,7 @@ class ExportDisplay(RunDisplay):
                 f"{without:>8,} without key",
                 "eeg.warn" if without else "eeg.muted",
             ),
-            Text(f"{_percent(summary['trefferquote']):>6} matched"),
+            Text(f"{_percent(summary['match_rate']):>6} matched"),
             Text(f"{decimal(size):>9}"),
             Text(f"{_took(item.seconds):>6}", "eeg.muted"),
             Text(summary["file"], "eeg.muted"),

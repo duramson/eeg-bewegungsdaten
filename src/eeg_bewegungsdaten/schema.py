@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import polars as pl
 
@@ -184,7 +185,7 @@ CLEAN_SCHEMA = pl.Schema(
         "eeg_einnahmen": pl.Float64(),
         "vermiedene_netzentgelte": pl.Float64(),
         "monat": pl.Int8(),
-        "qa_flags": pl.List(pl.String()),
+        "hinweise": pl.List(pl.String()),
         "quelldatei": pl.String(),
         "zeile": pl.Int32(),
     }
@@ -207,6 +208,22 @@ _UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss"})
 
 class FormatError(ValueError):
     """A CSV header that does not match the known formats."""
+
+
+class OutdatedFileError(RuntimeError):
+    """An output file written by an older version of the tool, without the current columns."""
+
+
+def check_columns(path: Path, schema: pl.Schema, command: str) -> None:
+    """Raise `OutdatedFileError` if the Parquet file `path` lacks a column of `schema`, as files
+    written before a column was renamed do; `command` writes the file again."""
+    columns = pl.read_parquet_schema(path)
+    missing = [name for name in schema if name not in columns]
+    if missing:
+        raise OutdatedFileError(
+            f"{path} has no column {', '.join(missing)}: it was written by an older version of "
+            f"the tool; run '{command}' again"
+        )
 
 
 def normalize_header(name: str) -> str:

@@ -247,16 +247,21 @@ def _mastr(args: argparse.Namespace) -> int:
         # open-MaStR can fail on single files and still report success.
         log.warning("Empty MaStR tables, check the open-MaStR log: %s", ", ".join(empty))
     # From all clean files, also those not selected.
-    with display.Step(args.console, "Bridge", "files") as step:
-        bridge = load_bridge(data_dir, register, progress=step.progress)
-        years = bridge.source["years"]
-        step.cells = [
-            f"{bridge.source['keys']:,} Anlagenschluessel of one EEG plant",
-            Text(
-                f"{bridge.source['keys_with_several_plants']:,} of several, not used", "eeg.muted"
-            ),
-            _from_years(years),
-        ]
+    try:
+        with display.Step(args.console, "Bridge", "files") as step:
+            bridge = load_bridge(data_dir, register, progress=step.progress)
+            years = bridge.source["years"]
+            step.cells = [
+                f"{bridge.source['keys']:,} Anlagenschluessel of one EEG plant",
+                Text(
+                    f"{bridge.source['keys_with_several_plants']:,} of several, not used",
+                    "eeg.muted",
+                ),
+                _from_years(years),
+            ]
+    except MastrError as e:
+        log.error("%s", e)
+        return 1
 
     cleans = [
         display.Clean(jahr, uenb, _rows(output_paths(data_dir, jahr, uenb).clean))

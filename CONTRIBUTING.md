@@ -11,6 +11,17 @@ ideas go into the [issue forms](https://github.com/duramson/eeg-bewegungsdaten/i
   a pull request right away.
 - One topic per pull request. If one builds on another, say so in the description.
 
+## Names
+
+- Column names are German. Most come from the legend of the TSOs (`strommenge`, `eeg_zahlung`,
+  `veraeusserungsform`); the columns the tool adds follow them (`sonderzeile`, `treffer`,
+  `hinweise`).
+- Codes in cells are English (`MASTR_NR_MISSING`, `REPEATED_ENERGY`, `NOT_FOUND`), as are the
+  values of `energietraeger`. Terms of the legend may stay inside a code, as in `EEG_NR`,
+  `KWK_NR` and `ANLAGENSCHLUESSEL`.
+- Keys in reports and other JSON files, the README and the docs are English. The source notes in
+  `sources.txt` stay German, as they follow the wording of the licenses.
+
 ## What stays out of a pull request
 
 - Files of your own tools and editors: `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `.claude/`,

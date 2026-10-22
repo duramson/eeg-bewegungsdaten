@@ -162,7 +162,7 @@ The Parquet files form three layers:
 
 - `text`: every line of every CSV file, split into the columns of the common schema. All
   values stay text, exactly as published. Use it to look at the raw values.
-- `clean`: the lines of `text` that can be read, trimmed, typed and marked with `qa_flags`.
+- `clean`: the lines of `text` that can be read, trimmed, typed and marked with `hinweise`.
 - `quarantine`: the lines of `text` that cannot be read, with an error code.
 
 `ingest` writes all three in one pass. For 2025, `text` takes 185 MB, about as much as
@@ -216,7 +216,7 @@ WHERE kodierung = 'cp1252';
 | --- | --- | --- |
 | `jahr` | Int16 | Year of the data, from the file name |
 | `uenb` | String | `50hertz`, `amprion`, `tennet` or `transnetbw` |
-| `eeg_mastr_nr` | String | `EEG_Mastr_Nr` as published; see `qa_flags` |
+| `eeg_mastr_nr` | String | `EEG_Mastr_Nr` as published; see `hinweise`. The EEG number found in the MaStR is `eeg_mastr_nr_abgeglichen` of `mastr` |
 | `anlagenschluessel` | String | `EEG_Anlagenschluessel`, free text |
 | `nb_mastr_nr` | String | MaStR number of the grid operator |
 | `nb_bnr` | String | BDEW number of the grid operator: most files up to 2023, TenneT 2025 |
@@ -230,7 +230,7 @@ WHERE kodierung = 'cp1252';
 | `eeg_einnahmen` | Float64 | EEG receipts, from 2024 |
 | `vermiedene_netzentgelte` | Float64 | Avoided grid fees (vNNE), until 2023 |
 | `monat` | Int8 | 1–12, or 0 for the annual value; always 0 before 2021. Other values, or null, with `MONAT_INVALID` |
-| `qa_flags` | List[String] | Quality codes, see below |
+| `hinweise` | List[String] | Quality codes, see below |
 | `quelldatei` | String | CSV file inside the ZIP (TenneT 2023: TXT file) |
 | `zeile` | Int32 | Line in that CSV file; the header is line 1 |
 
@@ -295,9 +295,9 @@ A line goes to quarantine only if its values cannot be read:
 | `BAD_VERAEUSSERUNGSFORM` | `Veraeusserungsform` is empty, or neither 1 to 5 nor one of the texts of 2020 to 2022 and Amprion 2018 |
 | `BAD_NUMBER` | An amount is not a decimal number with comma, e.g. `12.5` or `9,59E+11` (Excel cut off digits) |
 
-All other problems keep the row and add a code to `qa_flags`, so sums stay complete:
+All other problems keep the row and add a code to `hinweise`, so sums stay complete:
 
-| `qa_flags` | Meaning |
+| `hinweise` | Meaning |
 | --- | --- |
 | `MASTR_NR_MISSING` | `EEG_Mastr_Nr` is empty |
 | `MASTR_NR_IS_UNIT` | `EEG_Mastr_Nr` holds a unit number (`SEE…`) instead of an EEG number |
@@ -411,10 +411,10 @@ table in the database, they are `NOT_FOUND`. Step 4 does not change rows with `D
 | --- | --- |
 | `EEG_NR` | `EEG…` number found |
 | `UNIT_NR` | `SEE…` number found as a unit with an EEG number |
-| `MULTIPLE` | Several numbers; at least one found. All EEG numbers found are in `mastr_eeg_nrs` |
+| `MULTIPLE` | Several numbers; at least one found. All EEG numbers found are in `eeg_mastr_nrs_abgeglichen` |
 | `ANLAGENSCHLUESSEL` | No number found, or the `EEG…` number is given for other plants too (see step 1); the Anlagenschluessel belongs to exactly one EEG plant |
 | `KWK_NR` | No number or Anlagenschluessel found; the KWK number belongs to exactly one EEG plant |
-| `ANLAGENSCHLUESSEL_BRUECKE` | No number, Anlagenschluessel or KWK number leads to one plant; the rows of all years with this Anlagenschluessel that were matched by number name exactly one EEG plant (step 4) |
+| `ANLAGENSCHLUESSEL_BRIDGE` | No number, Anlagenschluessel or KWK number leads to one plant; the rows of all years with this Anlagenschluessel that were matched by number name exactly one EEG plant (step 4) |
 | `EEG_NR_CONFLICT` | The `EEG…` number is given for other plants too (see step 1); the Anlagenschluessel belongs to no single EEG plant |
 | `AMBIGUOUS` | No number found; the Anlagenschluessel or the KWK number belongs to several EEG plants |
 | `DELETED` | No number found; the unit number belongs to a deleted or deactivated unit |
@@ -443,9 +443,9 @@ over grid areas of others. How many rows the bridge matches, and how it was chec
 | --- | --- | --- |
 | `jahr`, `uenb`, `quelldatei`, `zeile` | | Same as in `clean`; together they identify the row |
 | `treffer` | String | How the row was matched, see above |
-| `mastr_eeg_nr` | String | `EegMastrNummer` of the plant; empty unless exactly one plant was found |
-| `mastr_eeg_nrs` | List[String] | All EEG numbers found, only for `MULTIPLE` |
-| `energietraeger` | String | `solar`, `wind`, `biomasse`, `wasser`, `gsgk` or `speicher`, from the MaStR table |
+| `eeg_mastr_nr_abgeglichen` | String | `EegMastrNummer` of the plant found in the MaStR; empty unless exactly one plant was found. `eeg_mastr_nr` of `clean` is the number as published |
+| `eeg_mastr_nrs_abgeglichen` | List[String] | All EEG numbers found, only for `MULTIPLE` |
+| `energietraeger` | String | `solar`, `wind`, `biomass`, `hydro`, `gsgk` or `storage`, from the MaStR table |
 
 `reports/<year>/<tso>.mastr.json` holds rows and EEG payments per `treffer`, the shares matched,
 the database file and tables used, with open-MaStR's export date (`DatumDownload`), and under
@@ -493,9 +493,17 @@ All columns of `clean` except `anlagenschluessel`, plus these:
 | Column | Type | Content |
 | --- | --- | --- |
 | `anlage_id` | Int64 | Random number per TSO and plant key; null if the row has no plant key (944,842 rows of 50Hertz, 2022 to 2025) |
-| `treffer`, `mastr_eeg_nr`, `energietraeger` | String | From `mastr`, see [Columns of `mastr`](#columns-of-mastr) |
+| `treffer`, `eeg_mastr_nr_abgeglichen`, `energietraeger` | String | From `mastr`, see [Columns of `mastr`](#columns-of-mastr) |
 
-`quelldatei` and `zeile` stay, so that every row can be traced to its line in the source file.
+`eeg_mastr_nr` is the EEG number as the TSO published it, `eeg_mastr_nr_abgeglichen` the one
+found in the MaStR. Use the latter to join MaStR data. `quelldatei` and `zeile` stay, so that
+every row can be traced to its line in the source file.
+
+Exports of earlier versions of the tool, such as the one of 21 October 2026, use older names: `qa_flags` for `hinweise`,
+`mastr_eeg_nr` for `eeg_mastr_nr_abgeglichen`, `ANLAGENSCHLUESSEL_BRUECKE` for
+`ANLAGENSCHLUESSEL_BRIDGE`, `biomasse`, `wasser` and `speicher` for `biomass`, `hydro` and
+`storage`, and `trefferquote` for `match_rate` in `sources.json`. Output files of `ingest` and
+`mastr` with the old names are refused with a message which command to run again.
 
 ### How `anlage_id` is assigned
 
@@ -511,7 +519,7 @@ All columns of `clean` except `anlagenschluessel`, plus these:
 
 - `quelldatei` and `zeile` point to the line in the source file. Anyone who has that file
   finds the original line again, plant key included.
-- `eeg_mastr_nr` and `mastr_eeg_nr` lead to the plant in the public MaStR.
+- `eeg_mastr_nr` and `eeg_mastr_nr_abgeglichen` lead to the plant in the public MaStR.
 - The export keeps every row, also those of PV plants up to 30 kW. It does not show them only
   in aggregates, as [Personal data](#personal-data) advises.
 - Apart from `anlagenschluessel`, no column of `clean` holds free text about people (checked

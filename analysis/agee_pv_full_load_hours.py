@@ -64,7 +64,7 @@ def energy_per_plant(jahr: int) -> pl.DataFrame:
     return (
         matched_rows(jahr, "solar")
         .filter(generation())
-        .group_by(pl.col("mastr_eeg_nr").alias("eeg_nr"))
+        .group_by(pl.col("eeg_mastr_nr_abgeglichen").alias("eeg_nr"))
         .agg(kwh=pl.col("strommenge").sum())
         .collect()
     )

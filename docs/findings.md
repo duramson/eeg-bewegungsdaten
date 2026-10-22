@@ -24,7 +24,7 @@ cp1252, 50Hertz and TenneT UTF-8. Some files use thousands separators (`138.981,
 
 ### Results for 2025
 
-| TSO | Lines | `clean` | `quarantine` | Most frequent `qa_flags` |
+| TSO | Lines | `clean` | `quarantine` | Most frequent `hinweise` |
 | --- | ---: | ---: | ---: | --- |
 | 50Hertz | 1,400,862 | 1,400,862 | 0 | 9,606 `MASTR_NR_MISSING`, 2 `MASTR_NR_INVALID` |
 | Amprion | 2,626,635 | 2,626,635 | 0 | 185,245 `MASTR_NR_IS_UNIT`, 26,354 `MASTR_NR_MISSING`, 4,483 `MASTR_NR_INVALID`, 199 `ENCODING_CP1252` |
@@ -166,7 +166,7 @@ year name two plants.
 
 Checks of the bridge:
 
-- Compared with a run without the bridge, all rows outside `ANLAGENSCHLUESSEL_BRUECKE` keep
+- Compared with a run without the bridge, all rows outside `ANLAGENSCHLUESSEL_BRIDGE` keep
   their match. Without the bridge, its rows are 1,437,595 `NOT_FOUND` and 163,014 `AMBIGUOUS`.
 - In 2016 to 2019, 99.8 % of the bridge rows with a solar, biomass, wind or hydro category are
   matched to a plant of that energy source (99.9 % of their payments). Per year and category the
@@ -241,7 +241,7 @@ Share of the EEG payments matched, without → with the bridge:
 With the MaStR export of 17 October 2026, 98.4 to 99.7 % of the rows and 99.6 to 99.7 % of the
 EEG payments are matched:
 
-| TSO | Rows | Matched rows | Matched payments | `EEG_NR` | `UNIT_NR` | `MULTIPLE` | `ANLAGENSCHLUESSEL` | `KWK_NR` | `ANLAGENSCHLUESSEL_BRUECKE` | `EEG_NR_CONFLICT` | `AMBIGUOUS` | `DELETED` | `NOT_FOUND` | `NO_ID` |
+| TSO | Rows | Matched rows | Matched payments | `EEG_NR` | `UNIT_NR` | `MULTIPLE` | `ANLAGENSCHLUESSEL` | `KWK_NR` | `ANLAGENSCHLUESSEL_BRIDGE` | `EEG_NR_CONFLICT` | `AMBIGUOUS` | `DELETED` | `NOT_FOUND` | `NO_ID` |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | 50Hertz | 1,400,862 | 99.4 % | 99.7 % | 1,389,414 | 0 | 0 | 2,178 | 0 | 230 | 0 | 85 | 0 | 8,953 | 2 |
 | Amprion | 2,626,635 | 99.1 % | 99.7 % | 2,404,217 | 184,666 | 1 | 10,311 | 99 | 2,614 | 216 | 150 | 185 | 24,176 | 0 |

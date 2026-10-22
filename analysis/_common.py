@@ -8,8 +8,15 @@ from typing import Any
 
 import polars as pl
 
-from eeg_bewegungsdaten.mastr import HITS, check_match, clean_files, default_db_path
+from eeg_bewegungsdaten.mastr import (
+    HITS,
+    MASTR_SCHEMA,
+    check_match,
+    clean_files,
+    default_db_path,
+)
 from eeg_bewegungsdaten.paths import default_data_dir, output_paths
+from eeg_bewegungsdaten.schema import CLEAN_SCHEMA, check_columns
 
 # Matches that lead to exactly one EEG plant.
 SINGLE_PLANT = [hit for hit in HITS if hit != "MULTIPLE"]
@@ -18,11 +25,15 @@ KEY = ["jahr", "uenb", "quelldatei", "zeile"]
 
 def matched_rows(jahr: int, energietraeger: str) -> pl.LazyFrame:
     """The clean rows of `jahr` that `mastr` matched to exactly one plant of `energietraeger`,
-    with `mastr_eeg_nr`."""
+    with `eeg_mastr_nr_abgeglichen`."""
     data = default_data_dir()
     uenbs = [uenb for year, uenb in clean_files(data) if year == jahr]
     clean = [output_paths(data, jahr, uenb).clean for uenb in uenbs]
     matches = [check_match(data, jahr, uenb) for uenb in uenbs]
+    for path in clean:
+        check_columns(path, CLEAN_SCHEMA, "ingest")
+    for path in matches:
+        check_columns(path, MASTR_SCHEMA, "mastr")
     return (
         pl.scan_parquet(clean)
         .join(pl.scan_parquet(matches), on=KEY)

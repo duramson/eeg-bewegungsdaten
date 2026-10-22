@@ -91,7 +91,7 @@ uv run python analysis/wind_full_load_hours.py 2016 2025 wind.parquet
   MaStR). It leaves out sites with a turbine that started or stopped during the year, sites where
   a turbine has no rows or lacks months, and sites above 5,000 h or below 100 h. It prints the
   capacity it leaves out for each reason.
-- Matches by the bridge (`ANLAGENSCHLUESSEL_BRUECKE`) add 1.2 to 1.9 GW to the capacity used in
+- Matches by the bridge (`ANLAGENSCHLUESSEL_BRIDGE`) add 1.2 to 1.9 GW to the capacity used in
   2016 to 2019. The full-load hours change by 3 h at most.
 - For districts with at least 20 MW, the values of consecutive years correlate with 0.77 to 0.92.
 - The script writes every district, also those with only a few turbines. Before you share the
