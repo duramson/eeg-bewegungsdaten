@@ -44,3 +44,22 @@ description.
   what was agreed on in it.
 - Say how you tested it: the commands, and for changes to the data the files and numbers you
   compared.
+
+## Labels
+
+Maintainers set the labels; you can suggest one in the description. Besides the GitHub defaults
+(`bug`, `enhancement`, `documentation`, …):
+
+- `changes output`: the change alters the columns, types or values of `text`, `clean`,
+  `quarantine`, `mastr` or the export, so outputs must be built again and differ from earlier
+  ones. Examples: a renamed column, a rule that moves rows to the quarantine, another match for
+  some rows. Not for changes that keep the content, such as smaller files, nor for new years that
+  leave the other years as they are. The title gets a `!` only if the change breaks scripts that
+  read the output, such as a renamed column.
+- `privacy`: touches personal data, such as the plant keys, the pseudonymization of the export
+  (`anlage_id`) or what the export and the analyses show of small plants.
+- `upstream`: the cause lies in the files of the TSOs or in open-MaStR, not in the tool. The
+  tool may still need a workaround.
+- `on hold`: waits for a decision, for example on scope or license; no work on it until then.
+- `data <year>`: the issues of the yearly upkeep, opened by the workflow `data-issues.yml` (see
+  [Development](README.md#development)).
