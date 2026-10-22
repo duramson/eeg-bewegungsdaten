@@ -10,6 +10,9 @@ URLs of all parts.
 A file counts as downloaded only once its metadata file exists. Data arrive in a ``.part`` file
 that is renamed after the size and the ZIP structure have been checked, so an aborted download
 never looks finished. A broken connection, a timeout, 429 and 5xx are tried again a few times.
+A transfer that breaks off keeps its ``.part``, with a ``.part.json`` that notes the URL and the
+ETag or Last-Modified. The next attempt, also in a later run, asks for the rest (``Range``,
+``If-Range``) and starts again if the server sends anything but the rest of the same file.
 
 When the server answers 404 for a file with a Wayback copy (`DownloadLink.fallback_url`), the
 copy is downloaded instead, into the same place. It must have the SHA-256 recorded in the link.
@@ -26,6 +29,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import time
 import zipfile
 from collections.abc import Callable
@@ -54,6 +58,10 @@ ATTEMPTS = 4
 RETRY_STATUS = frozenset({429, 500, 502, 503, 504})
 #: Seconds to wait at most before the next attempt, also when `Retry-After` asks for longer
 MAX_WAIT = 60.0
+#: Validator of a capture of the Wayback Machine: its bytes never change, but it comes without
+#: ETag or Last-Modified. A broken-off download of it goes on without If-Range.
+WAYBACK_CAPTURE = "wayback capture"
+_WAYBACK_CAPTURE = re.compile(r"^https://web\.archive\.org/web/\d+id_/")
 
 
 class DownloadError(RuntimeError):
@@ -245,37 +253,76 @@ def _fetch(
 ) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     part = path.with_name(path.name + ".part")
-    digest = hashlib.sha256()
-    size = 0
+    state = _state_path(part)
+    # Whether `part` holds the start of the file, so that the next attempt can go on from there
+    # if this one breaks off: a broken connection, a busy server, Ctrl+C.
+    resumable = False
+    keep = False
     try:
-        with http.stream("GET", url) as response:
-            response.raise_for_status()
-            headers = response.headers
-            expected = headers.get("Content-Length")
-            # Content-Length counts the bytes on the wire, before any Content-Encoding.
-            encoded = headers.get("Content-Encoding", "identity") != "identity"
-            total = int(expected) if expected is not None and expected.isdigit() else None
-            if progress is not None:
-                progress(0, total)
-            with part.open("wb") as f:
-                for chunk in response.iter_bytes(CHUNK_SIZE):
-                    f.write(chunk)
-                    digest.update(chunk)
-                    size += len(chunk)
-                    if progress is not None:
-                        progress(response.num_bytes_downloaded if encoded else size, total)
-                f.flush()
-                os.fsync(f.fileno())
-            received = response.num_bytes_downloaded if encoded else size
-            if expected is not None and int(expected) != received:
-                raise DownloadError(f"{url}: got {received} of {expected} bytes")
-            source_url = str(response.url)
+        resume = _resume_point(part, url)
+        resumable = resume is not None
+        while True:
+            with http.stream("GET", url, headers=_range_headers(resume)) as response:
+                if (
+                    resume
+                    and response.status_code in (206, 416)
+                    and not _continues(response, resume, url)
+                ):
+                    # A part of another version of the file, or none: start again.
+                    resume = None
+                    resumable = False
+                    continue
+                response.raise_for_status()
+                if response.status_code != 206:
+                    resume = None  # the whole file, also when the server ignored the range
+                headers = response.headers
+                start = resume[0] if resume else 0
+                digest = _sha256_of_part(part, start)
+                size = start
+                expected = headers.get("Content-Length")
+                # Content-Length counts the bytes on the wire, before any Content-Encoding.
+                encoded = headers.get("Content-Encoding", "identity") != "identity"
+                total = (
+                    start + int(expected) if expected is not None and expected.isdigit() else None
+                )
+                validator = None if encoded else _validator(headers, url)
+                if validator is None:
+                    state.unlink(missing_ok=True)
+                else:
+                    state.write_text(json.dumps({"url": url, "validator": validator}))
+                resumable = validator is not None
+                if progress is not None:
+                    progress(start, total)
+                with part.open("ab" if start else "wb") as f:
+                    for chunk in response.iter_bytes(CHUNK_SIZE):
+                        f.write(chunk)
+                        digest.update(chunk)
+                        size += len(chunk)
+                        if progress is not None:
+                            downloaded = response.num_bytes_downloaded
+                            progress(downloaded if encoded else size, total)
+                    f.flush()
+                    os.fsync(f.fileno())
+                # All bytes are in; from here a failed check deletes the part.
+                resumable = False
+                received = response.num_bytes_downloaded if encoded else size - start
+                if expected is not None and int(expected) != received:
+                    raise DownloadError(
+                        f"{url}: got {start + received} of {start + int(expected)} bytes"
+                    )
+                source_url = str(response.url)
+            break
         if sha256 is not None and digest.hexdigest() != sha256:
             raise DownloadError(f"{url}: SHA-256 {digest.hexdigest()}, expected {sha256}")
         _check_zip(part, url)
         _replace(part, path)
+    except (httpx.TransportError, httpx.HTTPStatusError, KeyboardInterrupt):
+        keep = resumable
+        raise
     finally:
-        part.unlink(missing_ok=True)
+        if not keep:
+            part.unlink(missing_ok=True)
+            state.unlink(missing_ok=True)
 
     return {
         "url": link.url,
@@ -299,6 +346,71 @@ def _fetch(
         "etag": headers.get("ETag"),
         "tool_version": __version__,
     }
+
+
+def _state_path(part: Path) -> Path:
+    """Where a broken-off `.part` notes its URL and the validator of the file it holds."""
+    return part.with_name(part.name + ".json")
+
+
+def _validator(headers: httpx.Headers, url: str) -> str | None:
+    """What tells whether the file changed since: a strong ETag, or else Last-Modified. A capture
+    of the Wayback Machine never changes, but has neither; it gets `WAYBACK_CAPTURE`."""
+    etag = str(headers.get("ETag") or "")
+    if etag and not etag.startswith("W/"):
+        return etag
+    modified = str(headers.get("Last-Modified") or "")
+    if modified:
+        return modified
+    return WAYBACK_CAPTURE if _WAYBACK_CAPTURE.match(url) else None
+
+
+def _range_headers(resume: tuple[int, str] | None) -> dict[str, str]:
+    """Ask for the rest of the file; with If-Range, the server sends the whole file instead if it
+    changed."""
+    if resume is None:
+        return {}
+    start, validator = resume
+    asked = {"Range": f"bytes={start}-"}
+    if validator != WAYBACK_CAPTURE:
+        asked["If-Range"] = validator
+    return asked
+
+
+def _resume_point(part: Path, url: str) -> tuple[int, str] | None:
+    """Bytes in `part` and their validator, if a broken-off download of `url` left them."""
+    state = _state_path(part)
+    try:
+        noted = json.loads(state.read_text(encoding="utf-8"))
+        size = part.stat().st_size
+    except (OSError, ValueError):
+        noted, size = None, 0
+    if not isinstance(noted, dict) or noted.get("url") != url or not size:
+        part.unlink(missing_ok=True)
+        state.unlink(missing_ok=True)
+        return None
+    return size, str(noted["validator"])
+
+
+def _continues(response: httpx.Response, resume: tuple[int, str], url: str) -> bool:
+    """Whether a 206 answer holds the rest of the same file, from the first missing byte on."""
+    start, validator = resume
+    content_range = response.headers.get("Content-Range", "")
+    return (
+        response.status_code == 206
+        and content_range.startswith(f"bytes {start}-")
+        and _validator(response.headers, url) == validator
+    )
+
+
+def _sha256_of_part(part: Path, size: int) -> Any:
+    """SHA-256 over the first `size` bytes of `part`, to go on with the rest."""
+    digest = hashlib.sha256()
+    if size:
+        with part.open("rb") as f:
+            for chunk in iter(lambda: f.read(CHUNK_SIZE), b""):
+                digest.update(chunk)
+    return digest
 
 
 def _replace(part: Path, path: Path) -> None:
