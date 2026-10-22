@@ -508,3 +508,65 @@ def test_cached_download_records_newly_discovered_parts(tmp_path: Path, link: Do
     assert not again.downloaded
     assert third.meta["expected_parts"] == [1, 2]
     assert json.loads(meta_path(first.path).read_text(encoding="utf-8"))["expected_parts"] == [1, 2]
+
+
+def test_zip_member_is_archived_with_its_doi_and_member_path(tmp_path: Path) -> None:
+    from tests.test_zip_range import range_response
+
+    link = next(link for link in older_links() if link.zip_member)
+    link = dataclasses.replace(link, size=len(CSV), sha256=hashlib.sha256(CSV).hexdigest())
+    assert link.zip_member
+    body = zip_bytes({link.zip_member: CSV})
+    server = Server(lambda request: range_response(request, body))
+    with server.client() as client:
+        result = download(link, tmp_path, client)
+
+    assert result.path.read_bytes() == CSV
+    assert result.meta["doi"] == "10.5281/zenodo.8010410"
+    assert result.meta["zip_member"] == link.zip_member
+    assert result.meta["size"] == len(CSV)
+    assert result.meta["sha256"] == hashlib.sha256(CSV).hexdigest()
+    assert result.meta["page_url"] is None
+    verify(result)
+
+
+@pytest.mark.parametrize("damage", ["hash", "size", "missing", "range"])
+def test_invalid_zip_member_leaves_no_finished_archive(tmp_path: Path, damage: str) -> None:
+    from tests.test_zip_range import range_response
+
+    link = next(link for link in older_links() if link.zip_member)
+    link = dataclasses.replace(link, size=len(CSV), sha256=hashlib.sha256(CSV).hexdigest())
+    assert link.zip_member
+    body = zip_bytes({"other.csv" if damage == "missing" else link.zip_member: CSV})
+    if damage == "hash":
+        link = dataclasses.replace(link, sha256="0" * 64)
+    if damage == "size":
+        link = dataclasses.replace(link, size=len(CSV) + 1)
+    server = Server(
+        lambda request: (
+            httpx.Response(200, content=body)
+            if damage == "range"
+            else range_response(request, body)
+        )
+    )
+    with server.client() as client, pytest.raises(DownloadError):
+        download(link, tmp_path, client)
+    assert leftovers(tmp_path) == []
+
+
+def test_implausibly_large_compressed_member_is_rejected_before_reading_it(tmp_path: Path) -> None:
+    import struct
+
+    from tests.test_zip_range import range_response
+
+    link = next(link for link in older_links() if link.zip_member)
+    link = dataclasses.replace(link, size=len(CSV), sha256=hashlib.sha256(CSV).hexdigest())
+    assert link.zip_member
+    body = bytearray(zip_bytes({link.zip_member: CSV}))
+    central = body.index(b"PK\x01\x02")
+    struct.pack_into("<L", body, central + 20, 1_000_000)
+    server = Server(lambda request: range_response(request, bytes(body)))
+    with server.client() as client, pytest.raises(DownloadError, match="size bound"):
+        download(link, tmp_path, client)
+    assert len(server.requests) == 1
+    assert leftovers(tmp_path) == []

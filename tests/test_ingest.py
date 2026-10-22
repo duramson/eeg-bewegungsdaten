@@ -545,3 +545,45 @@ def test_ingest_refuses_duplicate_parts(data_dir: Path) -> None:
 
     with pytest.raises(FormatError, match="duplicate upload parts"):
         ingest([part, part], data_dir)
+
+
+def test_amprion_payment_and_fee_files_form_one_complete_upload(data_dir: Path) -> None:
+    from tests.test_zip_range import range_response
+
+    links = [link for link in older_links() if (link.year, link.uenb) == (2013, "amprion")]
+    assert [link.part for link in links] == [1, 2]
+    files = []
+    for link in links:
+        header = "ANLAGENSCHLUESSEL;VERGUETUNGSKATEGORIE;MENGE [KWH];BETRAG [EURO]"
+        data = csv(header, "E900001;So-vNNe-----13;100;12,5")
+        if link.zip_member:
+            link = dataclasses.replace(
+                link, size=len(data), sha256=hashlib.sha256(data).hexdigest()
+            )
+            assert link.zip_member is not None
+            body = zip_bytes({link.zip_member: data})
+            with httpx.Client(
+                transport=httpx.MockTransport(lambda r, body=body: range_response(r, body))
+            ) as http:
+                files.append(download(link, data_dir, http))
+        else:
+            body = zip_bytes({"payments.csv": data})
+            link = dataclasses.replace(link, sha256=hashlib.sha256(body).hexdigest())
+            files.append(archive_body(data_dir, link, body))
+
+    with pytest.raises(FormatError, match="Incomplete"):
+        ingest(files[:1], data_dir)
+    with pytest.raises(FormatError, match="Incomplete"):
+        ingest(files[1:], data_dir)
+
+    assert [[f.path for f in upload] for upload in latest_uploads(data_dir)] == [
+        [f.path for f in files]
+    ]
+    report = ingest(files, data_dir)
+    assert report["rows"] == {"raw": 2, "clean": 2, "quarantine": 0}
+    assert report["sums_clean"]["eeg_zahlung"] == 12.5
+    assert report["sums_clean"]["vermiedene_netzentgelte"] == 12.5
+    assert report["sources"][1]["doi"] == links[1].doi
+    files[1].path.unlink()
+    with pytest.raises(FormatError, match="missing"):
+        ingest(latest_uploads(data_dir)[0], data_dir)

@@ -1,16 +1,17 @@
 # Findings
 
-What the files of 2011 to 2025 hold, and how well `eeg-bewegungsdaten` reads them and
+What the files of 2007 to 2025 hold, and how well `eeg-bewegungsdaten` reads them and
 matches them with the MaStR. The [README](../README.md) describes the tool and its output.
 `uv run pytest --realdata` checks the line counts and the sums against the annual account.
 
 ## Reading the files
 
-### Formats of 2011 to 2025
+### Formats of 2007 to 2025
 
 | Years | Layout | Notes |
 | --- | --- | --- |
-| 2011–2015 | own layout per file | the nine files from the TSOs' own sites (see [Older years](../README.md#older-years)); TenneT 2011, 2013 and 2015 and 50Hertz 2015 have the columns of 2016; TenneT 2014 has the BDEW number of the grid operator without its name, 50Hertz 2014 the name without the number; TenneT 2012 has no vNNE column (its `vNNe` rows hold the avoided grid fees as negative payments), and a year and a biomass fuel column; Amprion 2011 adds the plant address (kept only in `rohzeile`); of Amprion 2013 only the payments file survives, not the vNNE file; TenneT 2015 is a TXT file, 50Hertz 2014 and 2015 a bare CSV |
+| 2007–2015 | Zenodo members | see [Zenodo members](#zenodo-members) for the additional layouts |
+| 2011–2015 | own layout per file | the nine files from the TSOs' own sites (see [Older years](../README.md#older-years)); TenneT 2011, 2013 and 2015 and 50Hertz 2015 have the columns of 2016; TenneT 2014 has the BDEW number of the grid operator without its name, 50Hertz 2014 the name without the number; TenneT 2012 has no vNNE column (its `vNNe` rows hold the avoided grid fees as negative payments), and a year and a biomass fuel column; Amprion 2011 adds the plant address (kept only in `rohzeile`); Amprion 2013 combines the Wayback payments file with the Zenodo vNNE member; TenneT 2015 is a TXT file, 50Hertz 2014 and 2015 a bare CSV |
 | 2016 | own layout per TSO | other column names, Amprion in two files (payments, vNNE), 50Hertz and TransnetBW quote names and add a row number |
 | 2017–2019 | `EEG_Anlagenschluessel;NB_BNR;Netzbetreiber;Verguetungskategorie;Strommenge;EEG_Zahlung;Vermiedene_Netzentgelte` | no MaStR numbers, no `Veraeusserungsform` (Amprion 2018: `TYP`), no `Monat`; Amprion 2018–2019 without name, with the TSO's BDEW number |
 | 2020 | 11 columns | MaStR numbers added, `Veraeusserungsform` as text |
@@ -24,6 +25,48 @@ Up to 2023 most files are cp1252 throughout (50Hertz 2014: UTF-8 with a byte-ord
 cp1252, 50Hertz and TenneT UTF-8. Some files use thousands separators (`138.981,03`), Amprion
 2018 and 2019 pad values with spaces and write rounding noise as `3,9886E-06`.
 
+### Zenodo members
+
+Source: Batz Liñeiro and Müsgens (BTU, 2023),
+[German Renewable Energy Payment Register](https://doi.org/10.5281/zenodo.8010410), CC BY 4.0.
+The 28 selected members add 11,085,073 rows (836,198,727 extracted bytes; 111,021,610 compressed).
+HTTP ranges read the ZIP directory and each member; metadata retains the DOI and full member
+path. The catalog records each extracted size and SHA-256. No dataset bytes are redistributed.
+
+| Members | Format and interpretation |
+| --- | --- |
+| TransnetBW 2011–2012; 50Hertz 2011 | six columns, grid operator by name; `vNNE` or `vNE` means avoided grid fees |
+| TransnetBW 2013–2015 | verbose annual amount headers; `ÜNB-Anlagennummer` from 2014; 2015 adds row ID and grid-operator number |
+| Amprion 2007–2010 and 2012; 50Hertz 2012–2013 | reshaped `Unit_ID;EEG_tariff;Generation;Payment;ANC`, with decimal commas; numeric `NA` becomes null in clean, stays unchanged in text |
+| Amprion vNNE 2013–2014 | `BETRAG [EURO]` or `BETRAG_EURO` means avoided grid fees, determined by the `VNNE` filename; reported energy is retained |
+| Amprion payments 2014 | `MENGE_KWH;BETRAG_EURO` map to energy and EEG payments |
+| 50Hertz 2007–2010 | plant-level totals without tariff categories; category stays null; address and plant attributes stay only in `rohzeile` |
+
+The new members have 37 quarantined rows: 5 in 50Hertz 2012, 31 in 2013 and one in TransnetBW
+2009 use positive scientific exponents (`6e+05`, `8,00E+05`), which the existing numeric check
+rejects (`BAD_NUMBER`).
+Their source values remain in the text layer and quarantine. This leaves the clean payment
+sum for 50Hertz 2012 525,200 euros below the account. Amprion 2014 has one `NO_PLANT_ID` row.
+All 37 source files for 2007–2015 together have 22,541,704 rows, of which 46 are quarantined
+(the other 9 are the already documented Wayback cases).
+
+Amprion 2012's reshaped file contains zero `ANC` throughout. Its payments match the account
+within 87 euros, but it does not supply the 125,658,791.30 euros of avoided grid fees in that
+account. Treat those zeroes as a source limitation. Amprion 2015 is absent from the dataset.
+Amprion 2013 and 2014 are multipart uploads: missing either payment or fee file stops ingest.
+
+The ZIP dates TransnetBW 2011–2014 and 50Hertz 2010, 2012 and 2013 to December 2018;
+Amprion 2012, 50Hertz 2012 and 2013 visibly have reshaped headers. TenneT 2013–2015 have the
+same extracted sizes as the Wayback members (146,051,532; 117,672,750; 169,028,928 bytes),
+which does not prove byte identity. The catalog retains the Wayback copies for those years.
+For 2007–2010, the catalog selects Amprion's reshaped `<year>_a.txt` files. They use the same
+header as 2012; the original CSV parts mix amounts and units in rows. TransnetBW's reshaped
+`Unit_ID;Tech;Tariff;gen;pay;ANC` needs only column aliases; `Tech` stays in `rohzeile`, and
+missing tariffs stay null. 50Hertz uses its 2010 layout. TenneT uses its 2012 layout, including
+negative payments in `vNNe` rows for avoided grid fees. These years need no new parser or
+numeric rules. Their row counts and hashes are checked; annual accounts were not checked.
+`mastr` was not run on these years.
+
 ### Results for 2025
 
 | TSO | Lines | `clean` | `quarantine` | Most frequent `qa_flags` |
@@ -33,18 +76,22 @@ cp1252, 50Hertz and TenneT UTF-8. Some files use thousands separators (`138.981,
 | TenneT | 3,791,801 | 3,791,801 | 0 | 89,829 `MASTR_NR_MISSING`, 2,666 `MASTR_NR_MULTIPLE` |
 | TransnetBW | 1,499,225 | 1,499,225 | 0 | 1,016,002 `MONAT_EMPTY`, 6,135 `MASTR_NR_MISSING`, 152 `ENCODING_CP1252` |
 
-### Results for 2011 to 2024
+### Results for 2007 to 2024
 
-Lines per year and TSO; in brackets the lines in quarantine. Before 2016 only the nine files
-that survive.
+Lines per year and TSO; in brackets the lines in quarantine. Before 2016, the nine Wayback
+files plus the 28 Zenodo members.
 
 | Year | 50Hertz | Amprion | TenneT | TransnetBW |
 | --- | ---: | ---: | ---: | ---: |
-| 2011 | – | 801,547 (8) | 1,226,229 | – |
-| 2012 | – | – | 1,620,764 | – |
-| 2013 | – | 826,698 | 1,828,808 | – |
-| 2014 | 567,565 | – | 1,947,532 | – |
-| 2015 | 614,756 (1) | – | 2,022,732 | – |
+| 2007 | 29,635 | 215,806 | 207,825 | 80,112 |
+| 2008 | 39,274 | 277,130 | 413,632 | 106,611 |
+| 2009 | 53,208 | 366,027 | 587,609 | 136,448 (1) |
+| 2010 | 71,987 | 567,402 | 892,674 | 184,239 |
+| 2011 | 248,899 | 801,547 (8) | 1,226,229 | 505,464 |
+| 2012 | 395,701 (5) | 670,858 | 1,620,764 | 620,865 |
+| 2013 | 513,438 (31) | 1,254,490 | 1,828,808 | 684,634 |
+| 2014 | 567,565 | 1,301,868 | 1,947,532 | 732,363 |
+| 2015 | 614,756 (1) | – | 2,022,732 | 753,572 |
 | 2016 | 551,649 | 1,378,047 | 2,062,201 | 779,341 |
 | 2017 | 580,962 | 1,431,901 | 2,131,567 | 807,715 |
 | 2018 | 610,064 | 1,396,775 | 2,218,870 | 870,025 |
@@ -155,7 +202,7 @@ For 2023 to 2025, the Bewegungsdaten match it for every TSO:
   has ended (legend). The latter is in form 5, in categories ending in `aMW`: 0.56 TWh and
   22.5 million euros in 2025.
 - The account includes the rows with `EXTRA_VALUE` of TransnetBW 2024 and with `Monat` `13` of
-  Amprion 2023 (see [Results for 2011 to 2024](#results-for-2011-to-2024)). `clean` holds them
+  Amprion 2023 (see [Results for 2007 to 2024](#results-for-2007-to-2024)). `clean` holds them
   with their flag.
 - Amprion 2025 puts 33,264 self-consumption rows (`SV`, 0.14 TWh, no payment) in form 1.
 
@@ -173,6 +220,13 @@ are in the Wayback Machine; 2013 was not found.
 
 | File | Payments | Avoided grid fees |
 | --- | ---: | ---: |
+| 50Hertz 2011 | exact | exact |
+| TransnetBW 2011 | 8,369,184.12 euros less (0.415 %) | 323,409.65 euros less (1.093 %) |
+| TransnetBW 2012 | 399.72 euros less (0.000018 %) | 0.33 euros less |
+| Amprion 2012 | 86.02 euros more | source has zeroes; account has 125,658,791.30 euros |
+| TransnetBW 2014 | 7 euros less | 0.04 euros more |
+| Amprion 2014 | 70.41 euros more | 0.049 euros more |
+| TransnetBW 2015 | exact | exact |
 | Amprion 2011 | 611 euros less (0.00002 %) | 6 euros more |
 | TenneT 2011 | 22,195 euros less (0.0003 %) | 705 euros more (0.0005 %) |
 | TenneT 2012 | 23,859 euros more (0.0003 %) | 98,008 euros less (0.04 %) |
@@ -180,6 +234,10 @@ are in the Wayback Machine; 2013 was not found.
 | TenneT 2014 | 91,763 euros more (0.001 %) | 5,825 euros less (0.002 %) |
 | 50Hertz 2015 | exact | exact |
 | TenneT 2015 | 176 euros less | 103 euros less |
+
+TransnetBW 2011 keeps its observed shortfall in a separate regression test; it is not counted
+as matching the account. The 2012, 2014 and 2015 TransnetBW tests also enforce the small absolute
+differences above. These account tables describe the source data, not a correction to them.
 
 This also settles the year of the Amprion file `Bewegungsdaten_Internet.zip`, whose name has
 none: Amprion's page of 2011 linked it, and its sums are those of 2011.

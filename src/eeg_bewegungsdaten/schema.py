@@ -17,6 +17,16 @@ UENB_MASTR_NR = {
 # Column name after `normalize_header` -> column in the common schema. Until 2023 the names differ
 # by year and TSO; the comments name the files that use a spelling.
 SOURCE_COLUMNS = {
+    "tariff": "verguetungskategorie",  # TransnetBW 2007 to 2010 (Zenodo)
+    "gen": "strommenge",
+    "pay": "eeg_zahlung",
+    "unit_id": "anlagenschluessel",  # Amprion 2012, 50Hertz 2012 and 2013 (Zenodo)
+    "eeg_tariff": "verguetungskategorie",
+    "generation": "strommenge",
+    "payment": "eeg_zahlung",
+    "anc": "vermiedene_netzentgelte",
+    "uenb_anlagennummer": "anlagenschluessel",  # TransnetBW 2014 to 2016
+    "eeg_strom": "strommenge",  # 50Hertz 2010
     "eeg_mastr_nr": "eeg_mastr_nr",
     "eeg_anlagenschluessel": "anlagenschluessel",
     "anlagenschluessel": "anlagenschluessel",  # 2011 to 2016, Amprion 2017
@@ -80,6 +90,14 @@ IGNORED_COLUMNS = frozenset(
         "plz",
         "ort",
         "bundesland",
+        "tech",  # TransnetBW 2007 to 2010: energy source, not tariff category
+        "energietraeger",  # 50Hertz 2010: plant attributes, not tariff categories
+        "standort_der_anlage_ort_gemarkung",
+        "strasse_flurstueck",
+        "installierte_leistung",
+        "einsatzstoffe_nach_8abs_2_bei_biomasseanlagen",
+        "inbetriebnahmejahr",
+        "einspeisespannungsebene",
     }
 )
 IGNORED_PREFIX = "_ignored_"
@@ -116,12 +134,17 @@ _FROM_2024 = frozenset(
 LAYOUTS = (
     # 2016 to 2019, except Amprion 2016, 2018 and 2019; TenneT 2011, 2013 and 2015, 50Hertz 2015
     _UP_TO_2019,
+    _UP_TO_2019 - {"nb_bnr", "verguetungskategorie"},  # 50Hertz 2010: no tariff categories
     _UP_TO_2019 - {"nb_bnr"},  # 50Hertz 2014: grid operator by name only
     _UP_TO_2019 - {"nb_bnr", "netzbetreiber"},  # Amprion 2011: no grid operator
     _UP_TO_2019 - {"nb_bnr", "vermiedene_netzentgelte"},  # TenneT 2012: by name, no vNNE
     # Amprion 2016: payments and vNNE in two files; Amprion 2013: the payments file only
     frozenset({"anlagenschluessel", "verguetungskategorie", "strommenge", "eeg_zahlung"}),
     frozenset({"anlagenschluessel", "verguetungskategorie", "vermiedene_netzentgelte"}),
+    # Amprion 2013 and 2014: fee files also retain the reported energy.
+    frozenset(
+        {"anlagenschluessel", "verguetungskategorie", "strommenge", "vermiedene_netzentgelte"}
+    ),
     _AMPRION_2018,  # Amprion 2018 and 2019; TenneT 2014
     _AMPRION_2018 | {"veraeusserungsform"},  # Amprion 2018 with column TYP
     _2020,
@@ -257,6 +280,8 @@ def map_header(header: list[str], source: str) -> list[str | None]:
             mapped.append(None)
         elif key in IGNORED_COLUMNS:
             mapped.append(IGNORED_PREFIX + key)
+        elif key in {"betrag", "betrag_euro"} and re.search(r"(?i)(?:^|[/_])vnne[_.]", source):
+            mapped.append("vermiedene_netzentgelte")
         elif key in SOURCE_COLUMNS:
             mapped.append(SOURCE_COLUMNS[key])
         else:

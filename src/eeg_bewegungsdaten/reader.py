@@ -5,7 +5,7 @@ that are valid UTF-8 are decoded in one go; only the others are decoded line by 
 line gets the right encoding and is marked if it needed the fallback.
 
 The data are in the CSV files of the ZIP; TenneT 2023 ships a single TXT file instead. 50Hertz
-2014 and 2015 are a bare CSV file instead of a ZIP, read like a single member.
+2014 and 2015 and the extracted Zenodo CSV/TXT members are read as bare text files.
 """
 
 from __future__ import annotations
@@ -46,11 +46,11 @@ class Chunk:
 
 def iter_chunks(path: Path, block_size: int = BLOCK_SIZE) -> Iterator[Chunk]:
     """Yield the data lines of every data file in the ZIP at `path`, in archive order, or of
-    `path` itself when it is a bare CSV file.
+    `path` itself when it is a bare CSV or TXT file.
 
     A file without data lines still yields one empty chunk, so it shows up in reports.
     """
-    if _is_bare_csv(path):
+    if _is_bare_text(path):
         with path.open("rb") as stream:
             yield from _read_member(path.name, stream, block_size)
         return
@@ -100,8 +100,8 @@ def to_text(chunk: Chunk, *, jahr: int, uenb: str) -> pl.DataFrame:
 
 
 def skipped_members(path: Path) -> list[str]:
-    """Files in the ZIP that are neither folders nor data files; none for a bare CSV file."""
-    if _is_bare_csv(path):
+    """Files in the ZIP that are neither folders nor data files; none for a bare CSV or TXT file."""
+    if _is_bare_text(path):
         return []
     with zipfile.ZipFile(path) as archive:
         data = {info.filename for info in _data_members(archive)}
@@ -112,8 +112,8 @@ def skipped_members(path: Path) -> list[str]:
         ]
 
 
-def _is_bare_csv(path: Path) -> bool:
-    return path.suffix.lower() == ".csv"
+def _is_bare_text(path: Path) -> bool:
+    return path.suffix.lower() in (".csv", ".txt")
 
 
 def _data_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:

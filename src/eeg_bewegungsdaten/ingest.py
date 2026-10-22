@@ -188,6 +188,8 @@ def ingest(
                 key: f.meta.get(key)
                 for key in (
                     "url",
+                    "doi",
+                    "zip_member",
                     "filename",
                     "file_id",
                     "part",

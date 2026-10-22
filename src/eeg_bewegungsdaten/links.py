@@ -8,8 +8,8 @@ on the server without a link, 2016 to 2020 only survive in the Wayback Machine. 
 Machine also has a copy of a 2021 to 2024 file, `download` falls back to it once the server
 answers 404. `OLDER_FILES` lists the latest year too, for the time after the page moves on.
 
-Before 2016 each TSO published on its own site. The files that the Wayback Machine still
-has are in `EARLIER_FILES`, with TSO and year spelled out, as their names do not tell them.
+Before 2016 each TSO published on its own site. `EARLIER_FILES` holds Wayback copies and
+members of the Zenodo Payment Register, with explicit TSO, year and integrity checks.
 """
 
 from __future__ import annotations
@@ -69,6 +69,14 @@ class DownloadLink:
     """All part numbers of this upload, from the page or the known file catalog."""
     part_urls: tuple[str, ...] = ()
     """URLs of all parts of this upload."""
+    zip_member: str | None = None
+    """Member to extract from a remote ZIP using HTTP ranges."""
+    size: int | None = None
+    """Expected size of the extracted member in bytes."""
+    doi: str | None = None
+    """DOI of the dataset that supplies this member."""
+    upload_id: str | None = None
+    """Explicit group for complementary files from different source URLs."""
 
 
 def classify(url: str, published: dt.date | None = None) -> DownloadLink | None:
@@ -406,90 +414,518 @@ OLDER_FILES: tuple[tuple[str, str] | tuple[str, str, str, str], ...] = (
     ),
 )
 
-# Files of the years before 2016, from the TSOs' own sites; only the Wayback Machine still has
-# them. Entries: (TSO, year, Wayback timestamp, URL on the TSO's site, Last-Modified date of the
-# file, SHA-256), checked on 22 October 2026. 50Hertz published 2014 and 2015 as a bare CSV. The
-# Amprion file without a year in its name holds 2011: Amprion's page of 2011 linked it, and its
-# sums match the EEG annual account of 2011.
-EARLIER_FILES: tuple[tuple[str, int, str, str, str, str], ...] = (
-    (
+# Files before 2016: original Wayback copies plus the missing members held by Zenodo.
+# SHA-256 and sizes refer to the archived file, after extraction for Zenodo members.
+ZENODO_URL = "https://zenodo.org/api/records/8010410/files/PaymentRegister.zip/content"
+ZENODO_DOI = "10.5281/zenodo.8010410"
+EARLIER_FILES: tuple[DownloadLink, ...] = (
+    DownloadLink(
+        "https://web.archive.org/web/20150820204932id_/http://www.amprion.net/sites/default/files/zip/Bewegungsdaten_Internet.zip",
+        "Bewegungsdaten_Internet.zip",
+        "bewegungsdaten",
         "amprion",
         2011,
-        "20150820204932",
-        "http://www.amprion.net/sites/default/files/zip/Bewegungsdaten_Internet.zip",
-        "2012-07-31",
-        "062ceb3a1c6d122d51aa4e113ddb2d74479aabc9e54d36cd6648d69730decbb7",
+        None,
+        published=dt.date.fromisoformat("2012-07-31"),
+        listed=False,
+        sha256="062ceb3a1c6d122d51aa4e113ddb2d74479aabc9e54d36cd6648d69730decbb7",
     ),
-    (
+    DownloadLink(
+        "https://web.archive.org/web/20130326100131id_/http://www.tennettso.de/site/binaries/content/assets/eeg-kwk-g/eeg/eeg-daten/csv-datei-bewegungsdaten-nach-eeg-kategorien-2011.zip",
+        "csv-datei-bewegungsdaten-nach-eeg-kategorien-2011.zip",
+        "bewegungsdaten",
         "tennet",
         2011,
-        "20130326100131",
-        "http://www.tennettso.de/site/binaries/content/assets/eeg-kwk-g/eeg/eeg-daten/"
-        "csv-datei-bewegungsdaten-nach-eeg-kategorien-2011.zip",
-        "2012-09-06",
-        "2d136855331435cc066b9387881b5aab00ac7b11ea8903e0d68ec7a592fbf9d4",
+        None,
+        published=dt.date.fromisoformat("2012-09-06"),
+        listed=False,
+        sha256="2d136855331435cc066b9387881b5aab00ac7b11ea8903e0d68ec7a592fbf9d4",
     ),
-    (
+    DownloadLink(
+        "https://web.archive.org/web/20150423152946id_/http://www.tennet.eu/de/fileadmin/downloads/Kunden/CSV-Datei_Bewegungsdaten__EEG-Kategorien_aus_EEG-Jahresmeldung_2012_.csv.zip",
+        "CSV-Datei_Bewegungsdaten__EEG-Kategorien_aus_EEG-Jahresmeldung_2012_.csv.zip",
+        "bewegungsdaten",
         "tennet",
         2012,
-        "20150423152946",
-        "http://www.tennet.eu/de/fileadmin/downloads/Kunden/"
-        "CSV-Datei_Bewegungsdaten__EEG-Kategorien_aus_EEG-Jahresmeldung_2012_.csv.zip",
-        "2014-09-19",
-        "edd993727c9fb808a43bca547961c3d364a3d5b638241f08a6436a07a782a183",
+        None,
+        published=dt.date.fromisoformat("2014-09-19"),
+        listed=False,
+        sha256="edd993727c9fb808a43bca547961c3d364a3d5b638241f08a6436a07a782a183",
     ),
-    (
+    DownloadLink(
+        "https://web.archive.org/web/20160128161534id_/http://www.amprion.net/sites/default/files/Internet_Bewegungsdaten_VGT_DV_2013.zip",
+        "Internet_Bewegungsdaten_VGT_DV_2013.zip",
+        "bewegungsdaten",
         "amprion",
         2013,
-        "20160128161534",
-        "http://www.amprion.net/sites/default/files/Internet_Bewegungsdaten_VGT_DV_2013.zip",
-        "2014-07-25",
-        "ce69bac72aaddf8a0fae43b9e223a8b69b37e88bf5237cada52949954a3fadcb",
+        None,
+        published=dt.date.fromisoformat("2014-07-25"),
+        listed=False,
+        sha256="ce69bac72aaddf8a0fae43b9e223a8b69b37e88bf5237cada52949954a3fadcb",
+        part=1,
+        upload_id="amprion-2013-zenodo-8010410",
     ),
-    (
+    DownloadLink(
+        "https://web.archive.org/web/20220319125625id_/https://www.tennet.eu/fileadmin/user_upload/The_Electricity_Market/German_Market/EEG-KWKG/assets_reports_balancing/TenneT_Bewegungsdaten_2013.zip",
+        "TenneT_Bewegungsdaten_2013.zip",
+        "bewegungsdaten",
         "tennet",
         2013,
-        "20220319125625",
-        "https://www.tennet.eu/fileadmin/user_upload/The_Electricity_Market/German_Market/"
-        "EEG-KWKG/assets_reports_balancing/TenneT_Bewegungsdaten_2013.zip",
-        "2020-02-06",
-        "5c304f8bba7c6587deb60910a2da8057e43b57335e9f47f3372691ba17fc0b55",
+        None,
+        published=dt.date.fromisoformat("2020-02-06"),
+        listed=False,
+        sha256="5c304f8bba7c6587deb60910a2da8057e43b57335e9f47f3372691ba17fc0b55",
     ),
-    (
+    DownloadLink(
+        "https://web.archive.org/web/20180201020739id_/http://www.50hertz.com/Portals/3/Content/Dokumente/EEG/Veroeffentlichung-EEG-Daten/EEG-Jahresabrechnung/EEG_JEA_2014.csv",
+        "EEG_JEA_2014.csv",
+        "bewegungsdaten",
         "50hertz",
         2014,
-        "20180201020739",
-        "http://www.50hertz.com/Portals/3/Content/Dokumente/EEG/Veroeffentlichung-EEG-Daten/"
-        "EEG-Jahresabrechnung/EEG_JEA_2014.csv",
-        "2016-02-18",
-        "d99f184455a6eedbcad186d63ac3361120cf3ea5dd79de22c15dabd5c9cde3fa",
+        None,
+        published=dt.date.fromisoformat("2016-02-18"),
+        listed=False,
+        sha256="d99f184455a6eedbcad186d63ac3361120cf3ea5dd79de22c15dabd5c9cde3fa",
     ),
-    (
+    DownloadLink(
+        "https://web.archive.org/web/20220319125638id_/https://www.tennet.eu/fileadmin/user_upload/The_Electricity_Market/German_Market/EEG-KWKG/assets_reports_balancing/TenneT_Bewegungsdaten_2014.zip",
+        "TenneT_Bewegungsdaten_2014.zip",
+        "bewegungsdaten",
         "tennet",
         2014,
-        "20220319125638",
-        "https://www.tennet.eu/fileadmin/user_upload/The_Electricity_Market/German_Market/"
-        "EEG-KWKG/assets_reports_balancing/TenneT_Bewegungsdaten_2014.zip",
-        "2020-02-06",
-        "defe974361c81c62788a79288866a9fc4d3680e78f34d335958fd3581aae0eba",
+        None,
+        published=dt.date.fromisoformat("2020-02-06"),
+        listed=False,
+        sha256="defe974361c81c62788a79288866a9fc4d3680e78f34d335958fd3581aae0eba",
     ),
-    (
+    DownloadLink(
+        "https://web.archive.org/web/20171127035812id_/http://www.50hertz.com/Portals/3/Content/Dokumente/EEG/Veroeffentlichung-EEG-Daten/50Hertz_Bewegungsdaten_2015%5B1%5D.csv",
+        "50Hertz_Bewegungsdaten_2015[1].csv",
+        "bewegungsdaten",
         "50hertz",
         2015,
-        "20171127035812",
-        "http://www.50hertz.com/Portals/3/Content/Dokumente/EEG/Veroeffentlichung-EEG-Daten/"
-        "50Hertz_Bewegungsdaten_2015%5B1%5D.csv",
-        "2016-07-29",
-        "4ccfafa9c85c9b80d653a22e4a3e88aa6df19b3c7fe6756f212bfd870ab09561",
+        None,
+        published=dt.date.fromisoformat("2016-07-29"),
+        listed=False,
+        sha256="4ccfafa9c85c9b80d653a22e4a3e88aa6df19b3c7fe6756f212bfd870ab09561",
     ),
-    (
+    DownloadLink(
+        "https://web.archive.org/web/20220319125615id_/https://www.tennet.eu/fileadmin/user_upload/The_Electricity_Market/German_Market/EEG-KWKG/assets_reports_balancing/JM_2015_Bewegungsdaten.zip",
+        "JM_2015_Bewegungsdaten.zip",
+        "bewegungsdaten",
         "tennet",
         2015,
-        "20220319125615",
-        "https://www.tennet.eu/fileadmin/user_upload/The_Electricity_Market/German_Market/"
-        "EEG-KWKG/assets_reports_balancing/JM_2015_Bewegungsdaten.zip",
-        "2020-02-06",
-        "9cce08910cf6673d37a90adb046ec79db9da2dd6eac1cba690391b729fddac00",
+        None,
+        published=dt.date.fromisoformat("2020-02-06"),
+        listed=False,
+        sha256="9cce08910cf6673d37a90adb046ec79db9da2dd6eac1cba690391b729fddac00",
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2011.csv",
+        "bewegungsdaten",
+        "transnetbw",
+        2011,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="a43ee0a682b5411fa9492b2996a8aa49145da0ea5e4ca5109f6802ae05a7d867",
+        zip_member="PaymentRegister/Transnet/Original files/2011.csv",
+        size=43_475_407,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2012.csv",
+        "bewegungsdaten",
+        "transnetbw",
+        2012,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="74696b4246033c417a873de45657846017a7a382c084bf9e659ebca07b98de8c",
+        zip_member="PaymentRegister/Transnet/Original files/2012.csv",
+        size=53_595_778,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2013.csv",
+        "bewegungsdaten",
+        "transnetbw",
+        2013,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="a5016c4734064dbdbe504e2d8024b0429d8c304b10b8866b25586750decb7a2a",
+        zip_member="PaymentRegister/Transnet/Original files/2013.csv",
+        size=56_393_728,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2014.csv",
+        "bewegungsdaten",
+        "transnetbw",
+        2014,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="35887d88f7388ceb13ece8e4ebbfe4b33da57d384300ad1872a10db973d63b7d",
+        zip_member="PaymentRegister/Transnet/Original files/2014.csv",
+        size=47_012_059,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2015.csv",
+        "bewegungsdaten",
+        "transnetbw",
+        2015,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="57168a6ecfbd3cde2be9620dd6a28053a16c690367110dac2c2bd74f989550f5",
+        zip_member="PaymentRegister/Transnet/Original files/2015.csv",
+        size=60_426_565,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2010.csv",
+        "bewegungsdaten",
+        "50hertz",
+        2010,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="c1a1037450a1b50bed03639fb0aa4e4c185710e60fcde52656c6c4b94c11917b",
+        zip_member="PaymentRegister/Hertz/Original files/2010.csv",
+        size=10_032_046,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2011.csv",
+        "bewegungsdaten",
+        "50hertz",
+        2011,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="a531528beb9921bdd1a1a6d8164c6c346456b776572db6190e0b9704ff652fdf",
+        zip_member="PaymentRegister/Hertz/Original files/2011.csv",
+        size=22_609_007,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2012.csv",
+        "bewegungsdaten",
+        "50hertz",
+        2012,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="e3d5216ac07d3991d7d8a15c8d18114d9727125f8946866c0cc9aee8ef12aa37",
+        zip_member="PaymentRegister/Hertz/Original files/2012.csv",
+        size=25_623_062,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2013.csv",
+        "bewegungsdaten",
+        "50hertz",
+        2013,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="92a68e1f00574d1341502aa40586e7f747be539b01a0f1399f095064cc6a4764",
+        zip_member="PaymentRegister/Hertz/Original files/2013.csv",
+        size=33_321_965,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2012_a.txt",
+        "bewegungsdaten",
+        "amprion",
+        2012,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="b49271194abddac76d5e35d174ff411137605a31da660eac9b115521b7d570c6",
+        zip_member=("PaymentRegister/Amprion/Original files/Bewegungsdaten_2012/2012_a.txt"),
+        size=45_963_879,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "Internet_Bewegungsdaten_VNNE_2013.csv",
+        "bewegungsdaten",
+        "amprion",
+        2013,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="7155e8e1723594653fc156e1711c8c4d409aeb63676d23874b82997fd2a44914",
+        zip_member=(
+            "PaymentRegister/Amprion/Original files/Bewegungsdaten_2013/"
+            "Internet_Bewegungsdaten_VNNE_2013.csv"
+        ),
+        size=24_645_074,
+        doi=ZENODO_DOI,
+        part=2,
+        upload_id="amprion-2013-zenodo-8010410",
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "Bewegungsdaten_VGT_DV_2014.csv",
+        "bewegungsdaten",
+        "amprion",
+        2014,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="3d9685e67cee7b093298c640d777fe8c3026f3ab1d5b7303e5b2c8f005261b9d",
+        zip_member=(
+            "PaymentRegister/Amprion/Original files/Bewegungsdaten_2014/"
+            "Bewegungsdaten_VGT_DV_2014.csv"
+        ),
+        size=38_367_998,
+        doi=ZENODO_DOI,
+        part=1,
+        upload_id="amprion-2014-zenodo-8010410",
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "Bewegungsdaten_VNNE_2014.csv",
+        "bewegungsdaten",
+        "amprion",
+        2014,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="72174b96c732d5b49bddeea89efbf00cb14c44b5dc06a6f3233ac6f9ca2eabed",
+        zip_member=(
+            "PaymentRegister/Amprion/Original files/Bewegungsdaten_2014/"
+            "Bewegungsdaten_VNNE_2014.csv"
+        ),
+        size=17_884_824,
+        doi=ZENODO_DOI,
+        part=2,
+        upload_id="amprion-2014-zenodo-8010410",
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2007.csv",
+        "bewegungsdaten",
+        "transnetbw",
+        2007,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="bfd3dd70dd6a8289f414ef8227213a66d4865c298cb5cf32bb404dc81c105154",
+        zip_member="PaymentRegister/Transnet/Original files/2007.csv",
+        size=4_828_843,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2008.csv",
+        "bewegungsdaten",
+        "transnetbw",
+        2008,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="d49e337be012e4bc8014963ca45da4ce396031d89f7e8321a12f71036d2aa720",
+        zip_member="PaymentRegister/Transnet/Original files/2008.csv",
+        size=6_429_844,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2009.csv",
+        "bewegungsdaten",
+        "transnetbw",
+        2009,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="1a81a4879dc587010937c3a4260fe9f08e55511379b107ff6478c038b081fe53",
+        zip_member="PaymentRegister/Transnet/Original files/2009.csv",
+        size=8_245_137,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2010.csv",
+        "bewegungsdaten",
+        "transnetbw",
+        2010,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="9ffb71448d7f13f2d109d47930bf0dec3bd5ab129f596ed4b6103d12f65a862f",
+        zip_member="PaymentRegister/Transnet/Original files/2010.csv",
+        size=11_178_287,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2007.csv",
+        "bewegungsdaten",
+        "tennet",
+        2007,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="dcee3ca548534714a2a0df9246ea8e30eae7ab0148d4bdda02164ed09aef93d1",
+        zip_member="PaymentRegister/Tennet/Original files/2007.csv",
+        size=21_065_709,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2008.csv",
+        "bewegungsdaten",
+        "tennet",
+        2008,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="244a8bb00b7f71f4d517283ecbaf239031d7fd24c31481af025dbe7729060c6a",
+        zip_member="PaymentRegister/Tennet/Original files/2008.csv",
+        size=41_684_448,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2009.csv",
+        "bewegungsdaten",
+        "tennet",
+        2009,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="35b3a02e8be2f79ae1bb0a0b70e2ac744dd173f8ac3f6f46d80bfea2ea6d92e0",
+        zip_member="PaymentRegister/Tennet/Original files/2009.csv",
+        size=58_849_033,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2010.csv",
+        "bewegungsdaten",
+        "tennet",
+        2010,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="efbb2199c81d9564a53e397f0e7bea5ce97e6cb27f940158c3d6d2d5f99739aa",
+        zip_member="PaymentRegister/Tennet/Original files/2010.csv",
+        size=89_537_767,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2007.csv",
+        "bewegungsdaten",
+        "50hertz",
+        2007,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="3c6a4e745a19c6cafa6d77dcbc09137b884b57fb9fcf191b3e0d5011701973e3",
+        zip_member="PaymentRegister/Hertz/Original files/2007.csv",
+        size=4_129_865,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2008.csv",
+        "bewegungsdaten",
+        "50hertz",
+        2008,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="b522a6f7f884b26a7f13cd6d2b1b4288cefc2d5fc5577fcfe6a77f0edab48ee1",
+        zip_member="PaymentRegister/Hertz/Original files/2008.csv",
+        size=5_462_346,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2009.csv",
+        "bewegungsdaten",
+        "50hertz",
+        2009,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="9accab59a5962ced0b575d0cfc6a014df317f408b86521afb00c06b19f273ec4",
+        zip_member="PaymentRegister/Hertz/Original files/2009.csv",
+        size=7_408_833,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2007_a.txt",
+        "bewegungsdaten",
+        "amprion",
+        2007,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="08a1af5d49fba3185774c7d9591d038e3efe74443327a4256de5129142766b60",
+        zip_member="PaymentRegister/Amprion/Original files/Bewegungsdaten_2007/2007_a.txt",
+        size=15_195_083,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2008_a.txt",
+        "bewegungsdaten",
+        "amprion",
+        2008,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="8e1ae702d97d087daa1fc4b71db063c43d4002c536f454e0cf3a337913bab69c",
+        zip_member="PaymentRegister/Amprion/Original files/Bewegungsdaten_2008/2008_a.txt",
+        size=17_856_398,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2009_a.txt",
+        "bewegungsdaten",
+        "amprion",
+        2009,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="297505c8bd435a91f9a101c150d795f43cae59ade75da75df7226bd4ab4183b3",
+        zip_member="PaymentRegister/Amprion/Original files/Bewegungsdaten_2009/2009_a.txt",
+        size=25_449_952,
+        doi=ZENODO_DOI,
+    ),
+    DownloadLink(
+        ZENODO_URL,
+        "2010_a.txt",
+        "bewegungsdaten",
+        "amprion",
+        2010,
+        None,
+        published=dt.date(2023, 6, 6),
+        listed=False,
+        sha256="28af6619e97ac5c278783a52a3575e8abdc889245e6d73af635cef8a803d7aaf",
+        zip_member="PaymentRegister/Amprion/Original files/Bewegungsdaten_2010/2010_a.txt",
+        size=39_525_790,
+        doi=ZENODO_DOI,
     ),
 )
 
@@ -506,7 +942,7 @@ def older_links(listed: Iterable[DownloadLink] = ()) -> list[DownloadLink]:
     listed = list(listed)
     on_page = {(link.year, link.uenb) for link in listed if link.kind == "bewegungsdaten"}
     urls = {link.url for link in listed}
-    links = _earlier_links()
+    links = list(EARLIER_FILES)
     for url, published, *copy in OLDER_FILES:
         link = classify(url, dt.date.fromisoformat(published))
         assert link is not None, url
@@ -520,24 +956,6 @@ def older_links(listed: Iterable[DownloadLink] = ()) -> list[DownloadLink]:
             )
         links.append(link)
     return _group_parts(links)
-
-
-def _earlier_links() -> list[DownloadLink]:
-    """The files before 2016; `classify` cannot read TSO and year from their names."""
-    return [
-        DownloadLink(
-            _WAYBACK_ID.format(timestamp) + url,
-            unquote(url.rsplit("/", 1)[-1]),
-            "bewegungsdaten",
-            uenb,
-            year,
-            None,
-            dt.date.fromisoformat(published),
-            listed=False,
-            sha256=sha256,
-        )
-        for uenb, year, timestamp, url, published, sha256 in EARLIER_FILES
-    ]
 
 
 def _group_parts(links: list[DownloadLink]) -> list[DownloadLink]:
@@ -565,7 +983,7 @@ def _upload_key(link: DownloadLink) -> tuple[int | None, str | None, str | None]
     """Parts without a CDN id belong together if they share their server folder. On the CDN each
     part has its own id; as the page lists one upload per year and TSO, all parts of a year and
     TSO belong together."""
-    folder = None if link.file_id else link.url.rsplit("/", 1)[0]
+    folder = link.upload_id or (None if link.file_id else link.url.rsplit("/", 1)[0])
     return link.year, link.uenb, folder
 
 

@@ -133,7 +133,7 @@ def test_older_links_cover_every_tso_from_2016_on() -> None:
     assert any(link.kind == "legende" for link in links)
     assert not any(link.listed for link in links)
     assert all(link.published for link in links)
-    assert len({link.url for link in links}) == len(links)
+    assert len({(link.url, link.zip_member) for link in links}) == len(links)
 
 
 def test_older_links_keep_the_superseded_uploads_apart() -> None:
@@ -141,7 +141,7 @@ def test_older_links_keep_the_superseded_uploads_apart() -> None:
     for link in older_links():
         if link.kind == "bewegungsdaten":
             folders = uploads.setdefault((link.year, link.uenb), {})
-            folders.setdefault(str(link.published), set()).add(
+            folders.setdefault(link.upload_id or str(link.published), set()).add(
                 archive_path(Path("data"), link).parent
             )
 
@@ -169,13 +169,19 @@ def test_older_links_keep_the_superseded_uploads_apart() -> None:
 def test_older_links_before_2021_come_from_the_wayback_machine() -> None:
     for link in older_links():
         wayback = link.url.startswith("https://web.archive.org/web/")
-        assert wayback == (link.year is not None and link.year <= 2020), link.url
+        assert wayback == (link.year is not None and link.year <= 2020 and not link.zip_member), (
+            link.url
+        )
         if wayback and (link.year or 0) >= 2016:
             assert "id_/https://www.netztransparenz.de/" in link.url
 
 
 def test_files_before_2016_come_from_the_tso_sites_with_sha256() -> None:
-    earlier = [link for link in older_links() if link.year is not None and link.year < 2016]
+    earlier = [
+        link
+        for link in older_links()
+        if link.year is not None and link.year < 2016 and link.zip_member is None
+    ]
 
     assert sorted((link.year, link.uenb) for link in earlier) == [
         (2011, "amprion"),
@@ -364,3 +370,32 @@ def test_parts_on_the_cdn_share_a_folder_per_tso() -> None:
     assert [link.expected_parts for link in links] == [(1, 2), (1, 2), (1,)]
     assert {uenb: len(found) for uenb, found in folders.items()} == {"tennet": 1, "amprion": 1}
     assert folders["tennet"] != folders["amprion"]
+
+
+def test_zenodo_catalog_pins_each_member_and_groups_complementary_files() -> None:
+    links = older_links()
+    members = [link for link in links if link.zip_member]
+    assert len(members) == 28
+    assert len({link.zip_member for link in members}) == 28
+    for link in members:
+        assert link.size is not None
+        assert link.size > 0
+        assert link.sha256 is not None
+        assert re.fullmatch(r"[0-9a-f]{64}", link.sha256)
+        assert link.doi == "10.5281/zenodo.8010410"
+        assert link.zip_member is not None
+        assert "/Original files/" in link.zip_member
+        assert not link.listed
+    for year in (2013, 2014):
+        parts = [link for link in links if (link.year, link.uenb) == (year, "amprion")]
+        assert sorted(link.part for link in parts if link.part) == [1, 2]
+        assert all(link.expected_parts == (1, 2) for link in parts)
+        assert len({archive_path(Path("data"), link).parent for link in parts}) == 1
+
+
+def test_zenodo_covers_every_tso_from_2007_to_2010() -> None:
+    assert {
+        (link.year, link.uenb)
+        for link in older_links()
+        if link.year is not None and 2007 <= link.year <= 2010
+    } == {(year, tso) for year in range(2007, 2011) for tso in UENB}

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 from collections.abc import Callable
 from pathlib import Path
@@ -10,6 +11,7 @@ import pytest
 from eeg_bewegungsdaten import cli, links
 from eeg_bewegungsdaten.links import EARLIER_FILES, PAGE_URL, older_links, parse_links
 from tests.builders import PAGE, zip_bytes
+from tests.test_zip_range import range_response
 
 # The older files that `find_links` adds to the page
 OLDER = older_links(parse_links(PAGE))
@@ -26,20 +28,38 @@ def serve_page(
     def body(url: str) -> bytes:
         return bodies[".csv" if url.lower().endswith(".csv") else ".zip"]
 
+    member_body = bodies[".csv"]
+    remote_zip = zip_bytes(
+        {link.zip_member: member_body for link in EARLIER_FILES if link.zip_member}
+    )
+
     # The files before 2016 must have their recorded SHA-256: record the hashes of the bodies.
     monkeypatch.setattr(
         links,
         "EARLIER_FILES",
-        tuple((*entry[:5], hashlib.sha256(body(entry[3])).hexdigest()) for entry in EARLIER_FILES),
+        tuple(
+            dataclasses.replace(
+                link,
+                sha256=hashlib.sha256(
+                    member_body if link.zip_member else body(link.url)
+                ).hexdigest(),
+                size=len(member_body) if link.zip_member else link.size,
+            )
+            for link in EARLIER_FILES
+        ),
     )
 
     def handler(request: httpx.Request) -> httpx.Response:
         url = str(request.url)
-        seen.append(url)
+        # Count logical downloads, not the internal ZIP range requests.
+        if "Range" not in request.headers or request.headers["Range"].startswith("bytes=-"):
+            seen.append(url)
         if url == PAGE_URL:
             return httpx.Response(200, text=PAGE)
         if failing(url):
             return httpx.Response(429, text="slow down")
+        if url == links.ZENODO_URL:
+            return range_response(request, remote_zip)
         return httpx.Response(200, content=body(url))
 
     def new_client() -> httpx.Client:

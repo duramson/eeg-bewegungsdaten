@@ -41,6 +41,11 @@ OFFICIAL: dict[tuple[int, str], tuple[str, str, str]] = {
 # files before 2016 have no Veraeusserungsform, so all payments are compared at once. No account
 # of 2013 is online, so the files of that year cannot be checked.
 OFFICIAL_BEFORE_2016: dict[tuple[int, str], tuple[tuple[str, ...], str]] = {
+    (2011, "50hertz"): (("3.804.916.596,50",), "142.772.587,57"),
+    (2012, "transnetbw"): (("2.202.287.770,90", "129.308.091,96"), "53.495.619,29"),
+    (2014, "transnetbw"): (("2.018.123.648,54", "434.651.496,49"), "67.328.127,25"),
+    (2015, "transnetbw"): (("2.061.132.432,70", "520.913.030,72"), "76.777.531,19"),
+    (2014, "amprion"): (("3.036.660.073,21", "1.533.845.021,61"), "138.747.427,38"),
     (2011, "amprion"): (("3.490.580.815,11",), "72.619.864,64"),
     (2011, "tennet"): (("7.448.754.005,32",), "148.996.087,49"),
     (2012, "tennet"): (("6.990.850.311,17", "1.509.549.039,46"), "233.622.813,37"),
@@ -119,3 +124,49 @@ def test_sums_before_2016_match_the_annual_account(jahr: int, uenb: str, tmp_pat
         sums = [sums_clean["eeg_zahlung"], sums_clean["vermiedene_netzentgelte"]]
     assert sums[0] == pytest.approx(sum(euros(v) for v in payments), rel=1e-4)
     assert sums[1] == pytest.approx(euros(avoided_fees), rel=5e-4)  # TenneT 2012: 0.04 % less
+
+
+@pytest.mark.realdata
+@pytest.mark.parametrize(
+    ("year", "payment_limit", "fee_limit"),
+    [(2012, 400, 0.34), (2014, 7.01, 0.05), (2015, 0.01, 0.01)],
+)
+def test_transnetbw_zenodo_sums_stay_within_the_observed_differences(
+    year: int, payment_limit: float, fee_limit: float, tmp_path: Path
+) -> None:
+    report = ingest(upload_of(year, "transnetbw"), tmp_path)
+    payments, fees = OFFICIAL_BEFORE_2016[(year, "transnetbw")]
+    assert (
+        abs(report["sums_clean"]["eeg_zahlung"] - sum(euros(v) for v in payments)) <= payment_limit
+    )
+    assert abs(report["sums_clean"]["vermiedene_netzentgelte"] - euros(fees)) <= fee_limit
+
+
+@pytest.mark.realdata
+def test_transnetbw_2011_preserves_the_documented_shortfall(tmp_path: Path) -> None:
+    report = ingest(upload_of(2011, "transnetbw"), tmp_path)
+    sums = report["sums_clean"]
+    # The source is below the account, not an import error. Do not relax the matching tests.
+    assert sums["eeg_zahlung"] - euros("2.018.756.773,52") == pytest.approx(-8_369_184.12, abs=0.01)
+    assert sums["vermiedene_netzentgelte"] - euros("29.589.488,12") == pytest.approx(
+        -323_409.65, abs=0.01
+    )
+
+
+@pytest.mark.realdata
+def test_amprion_2012_matches_payments_but_has_no_reported_grid_fees(tmp_path: Path) -> None:
+    report = ingest(upload_of(2012, "amprion"), tmp_path)
+    official = euros("3.353.234.830,97") + euros("651.057.961,33")
+    assert report["sums_clean"]["eeg_zahlung"] == pytest.approx(official, abs=87, rel=0)
+    # The reshaped source has ANC=0 throughout; the account reports 125,658,791.30 euros.
+    assert report["sums_clean"]["vermiedene_netzentgelte"] == 0
+
+
+@pytest.mark.realdata
+def test_50hertz_2012_keeps_the_payment_shortfall_from_quarantined_rows(tmp_path: Path) -> None:
+    report = ingest(upload_of(2012, "50hertz"), tmp_path)
+    official = euros("2.869.870.047,37") + euros("1.412.293.437,93")
+    assert report["sums_clean"]["eeg_zahlung"] - official == pytest.approx(-525_200, abs=0.01)
+    assert report["sums_clean"]["vermiedene_netzentgelte"] == pytest.approx(
+        euros("180.165.180,25"), abs=0.01, rel=0
+    )
