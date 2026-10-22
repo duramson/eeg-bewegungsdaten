@@ -33,6 +33,12 @@ PAGE_URL = (
 )
 
 UENB = ("50hertz", "amprion", "tennet", "transnetbw")
+UENB_NAMES = {
+    "50hertz": "50Hertz Transmission GmbH",
+    "amprion": "Amprion GmbH",
+    "tennet": "TenneT TSO GmbH",
+    "transnetbw": "TransnetBW GmbH",
+}
 
 Kind = Literal["bewegungsdaten", "legende"]
 

@@ -35,7 +35,7 @@ from typing import Any
 import polars as pl
 
 from eeg_bewegungsdaten._version import __version__
-from eeg_bewegungsdaten.links import PAGE_URL, UENB
+from eeg_bewegungsdaten.links import PAGE_URL, UENB, UENB_NAMES
 from eeg_bewegungsdaten.mastr import HITS, MASTR_SCHEMA, MastrError, check_match, clean_files
 from eeg_bewegungsdaten.paths import (
     anlage_id_path,
@@ -92,12 +92,6 @@ ANLAGE_ID_SCHEMA = pl.Schema(
 # Ids have 12 digits at most, so they stay exact in JSON and spreadsheets.
 ID_LIMIT = 10**12
 
-UENB_NAMES = {
-    "50hertz": "50Hertz Transmission GmbH",
-    "amprion": "Amprion GmbH",
-    "tennet": "TenneT TSO GmbH",
-    "transnetbw": "TransnetBW GmbH",
-}
 EEG_NOTE = (
     "Datenquelle: EEG-Bewegungsdaten der Übertragungsnetzbetreiber {uenb}, {url}; Daten verändert "
     "(bereinigt, mit dem Marktstammdatenregister verknüpft, Anlagenschlüssel durch eine zufällige "
