@@ -3,11 +3,16 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from typing import Any
 
+import jsonschema
 import polars as pl
 import pytest
+from oemetadata.v2.v20.schema import OEMETADATA_V20_SCHEMA
 
 from eeg_bewegungsdaten import cli
+from eeg_bewegungsdaten.columns import COLUMNS
+from eeg_bewegungsdaten.datapackage import DATAPACKAGE_JSON
 from eeg_bewegungsdaten.export import (
     ANLAGE_ID_SCHEMA,
     DL_DE_BY,
@@ -84,6 +89,7 @@ def test_export_writes_one_file_per_year_and_the_sources(data_dir: Path) -> None
 
     names = sorted(path.name for path in (data_dir / "export").iterdir())
     assert names == [
+        "datapackage.json",
         "eeg-bewegungsdaten-2024.parquet",
         "eeg-bewegungsdaten-2025.parquet",
         "sources.json",
@@ -248,6 +254,74 @@ def test_sources_name_the_tsos_and_the_mastr_export(data_dir: Path) -> None:
     assert notes["eeg"] in text
     assert notes["mastr"] in text
     assert all(digest in text for digest in sha256)
+
+
+def read_datapackage(data_dir: Path) -> dict[str, Any]:
+    text = (data_dir / "export" / DATAPACKAGE_JSON).read_text(encoding="utf-8")
+    package: dict[str, Any] = json.loads(text)
+    return package
+
+
+def test_datapackage_is_valid_oemetadata_v2(data_dir: Path) -> None:
+    export(data_dir)
+
+    package = read_datapackage(data_dir)
+    jsonschema.validate(package, OEMETADATA_V20_SCHEMA)
+    assert package["metaMetadata"]["metadataVersion"] == "OEMetadata-2.0.4"
+
+
+def test_datapackage_has_one_resource_per_year_with_the_dictionary(data_dir: Path) -> None:
+    content = export(data_dir)
+
+    resources = read_datapackage(data_dir)["resources"]
+    assert [r["path"] for r in resources] == [
+        "eeg-bewegungsdaten-2024.parquet",
+        "eeg-bewegungsdaten-2025.parquet",
+    ]
+    fields = {field["name"]: field for field in resources[1]["schema"]["fields"]}
+    assert list(fields) == list(EXPORT_SCHEMA)
+    assert resources[1]["schema"]["primaryKey"] == ["jahr", "uenb", "quelldatei", "zeile"]
+    assert fields["strommenge"] | {"description": ""} == {
+        "name": "strommenge",
+        "description": "",
+        "type": "double precision",
+        "nullable": True,
+        "unit": "kWh",
+    }
+    assert fields["strommenge"]["description"] == COLUMNS["strommenge"].description
+    assert fields["hinweise"]["type"] == "text[]"
+    assert fields["jahr"]["nullable"] is False
+    codes = [ref["value"] for ref in fields["treffer"]["valueReference"]]
+    assert codes == list(COLUMNS["treffer"].codes)
+    # Each year names its own source files, with SHA-256, and the MaStR export.
+    files = [f for f in content["files"] if f["jahr"] == 2025]
+    sources = resources[1]["sources"]
+    assert [s["path"] for s in sources[:-1]] == [f["url"] for f in files]
+    assert all(f["sha256"] in s["description"] for s, f in zip(sources, files, strict=False))
+    assert sources[-1]["path"] == "https://www.marktstammdatenregister.de/MaStR/Datendownload"
+    assert resources[1]["contributors"] == []
+
+
+def test_datapackage_claims_no_license_for_the_eeg_data(data_dir: Path) -> None:
+    content = export(data_dir)
+
+    eeg, mastr = read_datapackage(data_dir)["resources"][0]["licenses"]
+    assert eeg["name"] is None
+    assert eeg["title"] == "EEG-Bewegungsdaten: no settled license"
+    assert eeg["attribution"] == content["source_notes"]["eeg"]
+    assert mastr["name"] == "DL-DE-BY-2.0"
+    assert mastr["attribution"] == content["source_notes"]["mastr"]
+
+
+def test_cli_export_names_the_contributor(data_dir: Path) -> None:
+    orcid = "https://orcid.org/0000-0000-0000-0000"
+    args = ["--data-dir", str(data_dir), "export", "--contributor", "A. Person"]
+    assert cli.main([*args, "--contributor-url", orcid]) == 0
+
+    for resource in read_datapackage(data_dir)["resources"]:
+        (contributor,) = resource["contributors"]
+        assert (contributor["title"], contributor["path"]) == ("A. Person", orcid)
+        assert contributor["roles"] == ["DataCurator"]
 
 
 def test_sources_name_every_mastr_export_date(data_dir: Path) -> None:

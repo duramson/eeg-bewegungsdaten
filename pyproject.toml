@@ -64,9 +64,16 @@ addopts = ["--strict-markers"]
 strict = true
 files = ["src", "tests", "analysis", ".github/scripts"]
 
+# Only the tests use them, to validate datapackage.json; neither ships type hints.
+[[tool.mypy.overrides]]
+module = ["jsonschema", "oemetadata.*"]
+ignore_missing_imports = true
+
 [dependency-groups]
 dev = [
+    "jsonschema>=4.22",
     "mypy>=2.4.0",
+    "oemetadata>=2.0.4",
     "pre-commit>=4.6.2",
     "pytest>=9.1.1",
     "ruff>=0.17.1",
