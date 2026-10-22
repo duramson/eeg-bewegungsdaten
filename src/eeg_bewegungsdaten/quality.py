@@ -2,7 +2,7 @@
 
 A line goes to quarantine only if its values cannot be read: neither UTF-8 nor cp1252, wrong
 number of fields, numbers or Veraeusserungsform that do not parse. Every other problem keeps the
-row and adds a code to `qa_flags`, so sums of energy and payments stay complete.
+row and adds a code to `hinweise`, so sums of energy and payments stay complete.
 
 Columns that a file does not have (MaStR numbers before 2020, Monat before 2021, EEG_Einnahmen
 before 2024, ...) are null, except Monat, which is 0 ("keine monatliche Zuordnung"). The checks of
@@ -101,7 +101,7 @@ def check(text: pl.DataFrame) -> tuple[pl.DataFrame, pl.DataFrame]:
     )
     clean = (
         frame.filter(pl.col("_code").is_null())
-        .with_columns(qa_flags=_flags())
+        .with_columns(hinweise=_flags())
         .with_columns(
             veraeusserungsform="_form",
             sonderzeile=special_row(pl.col("verguetungskategorie")),

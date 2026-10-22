@@ -5,7 +5,7 @@ Outputs, by default in ``export/``:
 
 - ``eeg-bewegungsdaten-<year>.parquet``: one row per clean row of all TSOs of that year, with
   the columns of ``clean`` except ``anlagenschluessel``, a random ``anlage_id`` instead, and
-  ``treffer``, ``mastr_eeg_nr`` and ``energietraeger`` from ``mastr``
+  ``treffer``, ``eeg_mastr_nr_abgeglichen`` and ``energietraeger`` from ``mastr``
 - ``sources.txt`` and ``sources.json``: source notes for the EEG data and the MaStR, and the
   source files with their SHA-256
 
@@ -36,7 +36,7 @@ import polars as pl
 
 from eeg_bewegungsdaten._version import __version__
 from eeg_bewegungsdaten.links import PAGE_URL, UENB
-from eeg_bewegungsdaten.mastr import HITS, MastrError, check_match, clean_files
+from eeg_bewegungsdaten.mastr import HITS, MASTR_SCHEMA, MastrError, check_match, clean_files
 from eeg_bewegungsdaten.paths import (
     anlage_id_path,
     export_dir,
@@ -47,6 +47,7 @@ from eeg_bewegungsdaten.paths import (
     write_text,
 )
 from eeg_bewegungsdaten.progress import Progress
+from eeg_bewegungsdaten.schema import CLEAN_SCHEMA, OutdatedFileError, check_columns
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ _FILE_PATTERN = re.compile(r"^eeg-bewegungsdaten-(\d{4})\.parquet$")
 SOURCES_JSON = "sources.json"
 SOURCES_TXT = "sources.txt"
 
-MASTR_COLUMNS = ("treffer", "mastr_eeg_nr", "energietraeger")
+MASTR_COLUMNS = ("treffer", "eeg_mastr_nr_abgeglichen", "energietraeger")
 # The columns of `clean` without `anlagenschluessel`, and `MASTR_COLUMNS`. Listed one by one, so
 # that a new column of `clean` is only exported after a check that it holds no personal data.
 EXPORT_SCHEMA = pl.Schema(
@@ -76,11 +77,11 @@ EXPORT_SCHEMA = pl.Schema(
         "eeg_einnahmen": pl.Float64(),
         "vermiedene_netzentgelte": pl.Float64(),
         "monat": pl.Int8(),
-        "qa_flags": pl.List(pl.String()),
+        "hinweise": pl.List(pl.String()),
         "quelldatei": pl.String(),
         "zeile": pl.Int32(),
         "treffer": pl.String(),
-        "mastr_eeg_nr": pl.String(),
+        "eeg_mastr_nr_abgeglichen": pl.String(),
         "energietraeger": pl.String(),
     }
 )
@@ -150,8 +151,10 @@ def export(
             if not path.is_file():
                 raise ExportError(f"{path} not found; run '{command}' first")
         try:
+            check_columns(paths.clean, CLEAN_SCHEMA, "ingest")
             check_match(data_dir, jahr, uenb)
-        except MastrError as e:
+            check_columns(paths.mastr, MASTR_SCHEMA, "mastr")
+        except (MastrError, OutdatedFileError) as e:
             raise ExportError(str(e)) from e
     others = sorted(
         path.name
@@ -288,7 +291,7 @@ def _summary(path: Path) -> dict[str, Any]:
         "rows": rows,
         "anlage_ids": plants,
         "rows_without_anlage_id": without_id,
-        "trefferquote": round(hits / rows, 6) if rows else None,
+        "match_rate": round(hits / rows, 6) if rows else None,
     }
 
 
@@ -348,7 +351,7 @@ def _sources_text(content: dict[str, Any]) -> str:
         "EEG-Bewegungsdaten",
         notes["eeg"],
         "",
-        "Marktstammdatenregister (Spalten treffer, mastr_eeg_nr, energietraeger)",
+        "Marktstammdatenregister (Spalten treffer, eeg_mastr_nr_abgeglichen, energietraeger)",
         notes["mastr"],
         "",
         "Quelldateien (Jahr, ÜNB, veröffentlicht, SHA-256, URL)",

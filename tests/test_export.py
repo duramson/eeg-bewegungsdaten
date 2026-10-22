@@ -220,7 +220,7 @@ def test_sources_name_the_tsos_and_the_mastr_export(data_dir: Path) -> None:
         "rows": 4,
         "anlage_ids": 2,
         "rows_without_anlage_id": 2,
-        "trefferquote": 0.75,
+        "match_rate": 0.75,
     }
     notes = content["source_notes"]
     assert notes["eeg"].startswith(
@@ -342,7 +342,25 @@ def test_export_rejects_changed_clean_rows_at_the_same_source_positions(
     export(data_dir)
     updated_rows = read(data_dir, 2025).filter(pl.col("uenb") == "amprion")
     assert updated_rows["eeg_mastr_nr"][0] == "EEG900000000002"
-    assert updated_rows["mastr_eeg_nr"][0] is None
+    assert updated_rows["eeg_mastr_nr_abgeglichen"][0] is None
+
+
+@pytest.mark.parametrize(
+    ("layer", "old", "new", "command"),
+    [
+        ("clean", "qa_flags", "hinweise", "ingest"),
+        ("mastr", "mastr_eeg_nr", "eeg_mastr_nr_abgeglichen", "mastr"),
+    ],
+)
+def test_export_refuses_files_with_the_columns_of_an_older_version(
+    data_dir: Path, layer: str, old: str, new: str, command: str
+) -> None:
+    path = getattr(output_paths(data_dir, 2025, "amprion"), layer)
+    pl.read_parquet(path).rename({new: old}).write_parquet(path)
+
+    with pytest.raises(ExportError, match=rf"has no column {new}.*run '{command}' again"):
+        export(data_dir)
+    assert not (data_dir / "export").exists()
 
 
 def test_export_refuses_a_match_report_without_clean_sha256(data_dir: Path) -> None:

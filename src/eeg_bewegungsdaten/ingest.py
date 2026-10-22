@@ -43,12 +43,20 @@ from eeg_bewegungsdaten.reader import (
     skipped_members,
     to_text,
 )
-from eeg_bewegungsdaten.schema import IGNORED_PREFIX, FormatError
+from eeg_bewegungsdaten.schema import (
+    CLEAN_SCHEMA,
+    IGNORED_PREFIX,
+    QUARANTINE_SCHEMA,
+    TEXT_SCHEMA,
+    FormatError,
+    check_columns,
+)
 
 log = logging.getLogger(__name__)
 
 Layer = Literal["text", "clean", "quarantine"]
 _LAYER_DIRS = {"text": text_dir, "clean": clean_dir, "quarantine": quarantine_dir}
+_LAYER_SCHEMAS = {"text": TEXT_SCHEMA, "clean": CLEAN_SCHEMA, "quarantine": QUARANTINE_SCHEMA}
 
 
 def latest_uploads(data_dir: Path) -> list[list[ArchivedFile]]:
@@ -171,7 +179,7 @@ def ingest(
             rows_clean += clean.height
             rows_quarantine += quarantine.height
             codes.update(dict(quarantine["fehlercode"].value_counts().iter_rows()))
-            flags.update(dict(clean["qa_flags"].explode().drop_nulls().value_counts().iter_rows()))
+            flags.update(dict(clean["hinweise"].explode().drop_nulls().value_counts().iter_rows()))
 
             text_parts.append(work / f"text-{i:05d}.parquet")
             clean_parts.append(work / f"clean-{i:05d}.parquet")
@@ -245,6 +253,9 @@ def _merge(parts: Iterable[Path], target: Path) -> None:
 def scan(data_dir: Path | None = None, *, layer: Layer = "clean") -> pl.LazyFrame:
     """One layer of every year and TSO as one LazyFrame: ``"clean"`` rows in the common
     schema, ``"quarantine"`` for lines that could not be read, ``"text"`` for every line with
-    all fields as published."""
+    all fields as published. Raises `OutdatedFileError` if a file has the columns of an older
+    version of the tool."""
     data_dir = data_dir or default_data_dir()
+    for path in sorted(_LAYER_DIRS[layer](data_dir).glob("*/*.parquet")):
+        check_columns(path, _LAYER_SCHEMAS[layer], "ingest")
     return pl.scan_parquet(_LAYER_DIRS[layer](data_dir) / "*" / "*.parquet")

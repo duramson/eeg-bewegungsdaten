@@ -17,7 +17,13 @@ from eeg_bewegungsdaten.links import PAGE_URL, find_links
 from eeg_bewegungsdaten.paths import output_paths
 from eeg_bewegungsdaten.quality import check
 from eeg_bewegungsdaten.reader import data_size
-from eeg_bewegungsdaten.schema import CLEAN_SCHEMA, QUARANTINE_SCHEMA, TEXT_SCHEMA, FormatError
+from eeg_bewegungsdaten.schema import (
+    CLEAN_SCHEMA,
+    QUARANTINE_SCHEMA,
+    TEXT_SCHEMA,
+    FormatError,
+    OutdatedFileError,
+)
 from tests.builders import (
     HEADER,
     HEADER_TRANSNETBW_1,
@@ -439,6 +445,16 @@ def test_scan_combines_years_and_tsos(data_dir: Path) -> None:
     assert combined.rows() == [(2024, "transnetbw", 1), (2025, "amprion", 3)]
     assert scan(data_dir, layer="quarantine").collect().height == 1
     assert scan(data_dir, layer="text").collect().height == 5
+
+
+def test_scan_refuses_files_with_the_columns_of_an_older_version(data_dir: Path) -> None:
+    ingest(archive(data_dir, amprion_members()), data_dir)
+    path = output_paths(data_dir, 2025, "amprion").clean
+    pl.read_parquet(path).rename({"hinweise": "qa_flags"}).write_parquet(path)
+
+    with pytest.raises(OutdatedFileError, match=r"has no column hinweise.*run 'ingest' again"):
+        scan(data_dir)
+    assert scan(data_dir, layer="text").collect().height == 4
 
 
 def test_scan_defaults_to_the_data_folder(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:

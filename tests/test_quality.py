@@ -43,7 +43,7 @@ from tests.old_formats import (
 
 
 def flags_of(clean: pl.DataFrame) -> list[list[str]]:
-    return [list(flags) for flags in clean["qa_flags"].to_list()]
+    return [list(flags) for flags in clean["hinweise"].to_list()]
 
 
 # --- rows that are kept -------------------------------------------------------------------
@@ -64,7 +64,7 @@ def test_valid_row_has_typed_values_and_no_flags(tmp_path: Path) -> None:
     assert record["jahr"] == 2025
     assert record["quelldatei"] == "Bewegungsdaten.csv"
     assert record["zeile"] == 2
-    assert record["qa_flags"] == []
+    assert record["hinweise"] == []
 
 
 def test_missing_mastr_nr_is_flagged(tmp_path: Path) -> None:
@@ -231,7 +231,7 @@ def test_tennet_layout_fills_grid_operator_columns(tmp_path: Path) -> None:
     assert record["netzbetreiber"] == "Netz Musterstadt GmbH"
     assert record["strommenge"] == 214.0
     assert record["monat"] == 7
-    assert record["qa_flags"] == []
+    assert record["hinweise"] == []
 
 
 def test_other_layouts_have_empty_grid_operator_columns(tmp_path: Path) -> None:
@@ -576,7 +576,7 @@ def test_tennet_2024_first_upload_without_monat_has_annual_values(tmp_path: Path
     assert quarantine.is_empty()
     record = clean.row(0, named=True)
     assert (record["monat"], record["strommenge"], record["eeg_einnahmen"]) == (0, 6509.0, 0.0)
-    assert record["qa_flags"] == ["MASTR_NR_MISSING"]
+    assert record["hinweise"] == ["MASTR_NR_MISSING"]
 
 
 def test_tennet_2023_txt_file_with_quoted_fields(tmp_path: Path) -> None:
@@ -593,7 +593,7 @@ def test_tennet_2023_txt_file_with_quoted_fields(tmp_path: Path) -> None:
     assert record["netzbetreiber"] == "Elektrizitätswerk Musterdorf GmbH"
     assert (record["strommenge"], record["veraeusserungsform"], record["monat"]) == (4180.0, 1, 7)
     assert record["quelldatei"] == "Bewegungsdaten 2023.txt"
-    assert record["qa_flags"] == ["ENCODING_CP1252"]
+    assert record["hinweise"] == ["ENCODING_CP1252"]
 
 
 def test_amprion_2022_layout_has_text_form_and_vnne(tmp_path: Path) -> None:
@@ -606,7 +606,7 @@ def test_amprion_2022_layout_has_text_form_and_vnne(tmp_path: Path) -> None:
     record = clean.row(0, named=True)
     assert (record["veraeusserungsform"], record["monat"]) == (1, 10)
     assert (record["vermiedene_netzentgelte"], record["eeg_einnahmen"]) == (0.0, None)
-    assert record["qa_flags"] == ["ENCODING_CP1252"]
+    assert record["hinweise"] == ["ENCODING_CP1252"]
 
 
 def test_amprion_2017_row_numbers_are_dropped(tmp_path: Path) -> None:

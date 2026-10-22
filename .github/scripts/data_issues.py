@@ -86,7 +86,7 @@ def new_year(year: int, links: Sequence[DownloadLink]) -> list[Issue]:
 - [ ] `uv run eeg-bewegungsdaten ingest --year {year} --uenb {uenb}` runs without a \
 `FormatError`. If not, add the new layout to `schema.py` (`SOURCE_COLUMNS`, `LAYOUTS`) and its \
 header to `tests/old_formats.py`.
-- [ ] Compare the quarantine codes and `qa_flags` with {year - 1}. New codes or large jumps \
+- [ ] Compare the quarantine codes and `hinweise` with {year - 1}. New codes or large jumps \
 need a look.
 - [ ] Look for new files in the ZIP, parts, encodings and changes in the number of lines.
 - [ ] Add the SHA-256, the line count and the codes to `EXPECTED` in \

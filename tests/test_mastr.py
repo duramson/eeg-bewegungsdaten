@@ -85,19 +85,19 @@ def test_load_register_reads_plants_units_and_keys(db: Path) -> None:
         ("EEG900000000001", KEY_A, "solar"),
         ("EEG900000000002", KEY_SHARED, "solar"),
         ("EEG900000000004", None, "solar"),
-        ("EEG900000000005", None, "biomasse"),
-        ("EEG900000000006", None, "biomasse"),
-        ("EEG900000000007", None, "biomasse"),
+        ("EEG900000000005", None, "biomass"),
+        ("EEG900000000006", None, "biomass"),
+        ("EEG900000000007", None, "biomass"),
         ("EEG900000000008", KEY_SHARED, "wind"),
     ]
     # Units without an EEG number are left out. Only biomass and GSGK units have KWK numbers.
     assert register.units.sort("einheit_nr").rows() == [
         ("SEE900000000011", "EEG900000000002", None, "solar"),
         ("SEE900000000013", "EEG900000000008", None, "wind"),
-        ("SEE900000000021", "EEG900000000005", "KWK900000000031", "biomasse"),
-        ("SEE900000000022", "EEG900000000005", "KWK900000000031", "biomasse"),
-        ("SEE900000000023", "EEG900000000006", "KWK900000000032", "biomasse"),
-        ("SEE900000000024", "EEG900000000007", "KWK900000000032", "biomasse"),
+        ("SEE900000000021", "EEG900000000005", "KWK900000000031", "biomass"),
+        ("SEE900000000022", "EEG900000000005", "KWK900000000031", "biomass"),
+        ("SEE900000000023", "EEG900000000006", "KWK900000000032", "biomass"),
+        ("SEE900000000024", "EEG900000000007", "KWK900000000032", "biomass"),
     ]
     keys = register.keys.sort("anlagenschluessel").select("anlagenschluessel", "plants")
     assert keys.rows() == [(KEY_A, 1), (KEY_SHARED, 2)]
@@ -110,7 +110,7 @@ def test_load_register_counts_eeg_plants_per_kwk_number(db: Path) -> None:
         ("KWK900000000031", 1),
         ("KWK900000000032", 2),
     ]
-    assert kwk.row(0) == ("KWK900000000031", 1, "EEG900000000005", "biomasse")
+    assert kwk.row(0) == ("KWK900000000031", 1, "EEG900000000005", "biomass")
 
 
 def test_load_register_reads_deleted_units(db: Path) -> None:
@@ -242,7 +242,8 @@ def test_register_frames_are_strings(db: Path) -> None:
         assert set(frame.schema.dtypes()) == {pl.String()}
 
 
-# EEG_Mastr_Nr, EEG_Anlagenschluessel -> treffer, mastr_eeg_nr, mastr_eeg_nrs, energietraeger
+# EEG_Mastr_Nr, EEG_Anlagenschluessel
+# -> treffer, eeg_mastr_nr_abgeglichen, eeg_mastr_nrs_abgeglichen, energietraeger
 CASES = [
     (("EEG900000000001", ""), ("EEG_NR", "EEG900000000001", None, "solar")),
     (("SEE900000000011", KEY_A), ("UNIT_NR", "EEG900000000002", None, "solar")),
@@ -268,10 +269,10 @@ CASES = [
         ("ANLAGENSCHLUESSEL", "EEG900000000001", None, "solar"),
     ),
     (("", KEY_SHARED), ("AMBIGUOUS", None, None, None)),
-    (("KWK900000000031", ""), ("KWK_NR", "EEG900000000005", None, "biomasse")),
+    (("KWK900000000031", ""), ("KWK_NR", "EEG900000000005", None, "biomass")),
     # The Anlagenschluessel comes first; the KWK number only resolves an ambiguous one.
     (("KWK900000000031", KEY_A), ("ANLAGENSCHLUESSEL", "EEG900000000001", None, "solar")),
-    (("KWK900000000031", KEY_SHARED), ("KWK_NR", "EEG900000000005", None, "biomasse")),
+    (("KWK900000000031", KEY_SHARED), ("KWK_NR", "EEG900000000005", None, "biomass")),
     (("KWK900000000032", ""), ("AMBIGUOUS", None, None, None)),
     # The KWK unit has no EEG number.
     (("KWK900000000033", ""), ("NOT_FOUND", None, None, None)),
@@ -300,13 +301,27 @@ def data_dir(tmp_path: Path) -> Path:
     return data_dir
 
 
+def test_mastr_refuses_clean_files_of_an_older_version(data_dir: Path, db: Path) -> None:
+    path = output_paths(data_dir, 2025, "amprion").clean
+    pl.read_parquet(path).rename({"hinweise": "qa_flags"}).write_parquet(path)
+    register = load_register(db)
+
+    with pytest.raises(MastrError, match=r"has no column hinweise.*run 'ingest' again"):
+        load_bridge(data_dir, register)
+    with pytest.raises(MastrError, match=r"has no column hinweise.*run 'ingest' again"):
+        link_file(data_dir, 2025, "amprion", register)
+    assert not output_paths(data_dir, 2025, "amprion").mastr.exists()
+
+
 def test_link_file_matches_every_case(data_dir: Path, db: Path) -> None:
     link_file(data_dir, 2025, "amprion", load_register(db))
 
     linked = pl.read_parquet(output_paths(data_dir, 2025, "amprion").mastr)
     assert linked.schema == MASTR_SCHEMA
     assert linked["zeile"].to_list() == list(range(2, len(CASES) + 2))
-    got = linked.select("treffer", "mastr_eeg_nr", "mastr_eeg_nrs", "energietraeger").rows()
+    got = linked.select(
+        "treffer", "eeg_mastr_nr_abgeglichen", "eeg_mastr_nrs_abgeglichen", "energietraeger"
+    ).rows()
     assert got == [expected for _, expected in CASES]
 
 
@@ -327,7 +342,7 @@ def test_link_resolves_an_eeg_number_given_for_several_plants(tmp_path: Path) ->
             "AnlagenEegBiomasse": plants(("EEG900000000201", key_x)),
         },
     )
-    # EEG_Mastr_Nr, EEG_Anlagenschluessel -> treffer, mastr_eeg_nr, energietraeger
+    # EEG_Mastr_Nr, EEG_Anlagenschluessel -> treffer, eeg_mastr_nr_abgeglichen, energietraeger
     cases = [
         # A wind farm: the grid operator gives the number of the first turbine in the rows of
         # all turbines, each with the turbine's own Anlagenschluessel.
@@ -339,8 +354,8 @@ def test_link_resolves_an_eeg_number_given_for_several_plants(tmp_path: Path) ->
         (("EEG900000000101", key_shared), ("EEG_NR_CONFLICT", None, None)),
         (("EEG900000000101", None), ("EEG_NR_CONFLICT", None, None)),
         # Several Anlagenschluessel, but none of another plant: perhaps engines of one plant.
-        (("EEG900000000201", key_x), ("EEG_NR", "EEG900000000201", "biomasse")),
-        (("EEG900000000201", key_z), ("EEG_NR", "EEG900000000201", "biomasse")),
+        (("EEG900000000201", key_x), ("EEG_NR", "EEG900000000201", "biomass")),
+        (("EEG900000000201", key_z), ("EEG_NR", "EEG900000000201", "biomass")),
         # One Anlagenschluessel, of another plant: the number stays.
         (("EEG900000000105", key_2), ("EEG_NR", "EEG900000000105", "wind")),
     ]
@@ -348,18 +363,18 @@ def test_link_resolves_an_eeg_number_given_for_several_plants(tmp_path: Path) ->
         {
             "eeg_mastr_nr": [nr for (nr, _), _ in cases],
             "anlagenschluessel": [key for (_, key), _ in cases],
-            "qa_flags": [[] for _ in cases],
+            "hinweise": [[] for _ in cases],
         },
         schema={
             "eeg_mastr_nr": pl.String(),
             "anlagenschluessel": pl.String(),
-            "qa_flags": pl.List(pl.String()),
+            "hinweise": pl.List(pl.String()),
         },
     )
 
     linked = link(clean, load_register(db)).collect()
 
-    got = linked.select("treffer", "mastr_eeg_nr", "energietraeger").rows()
+    got = linked.select("treffer", "eeg_mastr_nr_abgeglichen", "energietraeger").rows()
     assert got == [expected for _, expected in cases]
 
 
@@ -414,18 +429,18 @@ def test_link_file_matches_rows_by_the_bridge(years_dir: Path, db: Path) -> None
     report = link_file(years_dir, 2019, "transnetbw", register, bridge)
 
     linked = pl.read_parquet(output_paths(years_dir, 2019, "transnetbw").mastr)
-    assert linked.select("treffer", "mastr_eeg_nr", "energietraeger").rows() == [
-        ("ANLAGENSCHLUESSEL_BRUECKE", "EEG900000000004", "solar"),
+    assert linked.select("treffer", "eeg_mastr_nr_abgeglichen", "energietraeger").rows() == [
+        ("ANLAGENSCHLUESSEL_BRIDGE", "EEG900000000004", "solar"),
         # Of plants 2 and 8 in the MaStR; the rows matched by number name plant 8.
-        ("ANLAGENSCHLUESSEL_BRUECKE", "EEG900000000008", "wind"),
-        ("ANLAGENSCHLUESSEL_BRUECKE", "EEG900000000002", "solar"),
+        ("ANLAGENSCHLUESSEL_BRIDGE", "EEG900000000008", "wind"),
+        ("ANLAGENSCHLUESSEL_BRIDGE", "EEG900000000002", "solar"),
         ("NOT_FOUND", None, None),
         ("NOT_FOUND", None, None),
         ("ANLAGENSCHLUESSEL", "EEG900000000001", "solar"),
         ("NOT_FOUND", None, None),
     ]
-    assert report["treffer"]["ANLAGENSCHLUESSEL_BRUECKE"]["rows"] == 3
-    assert report["trefferquote"]["rows"] == round(4 / 7, 6)
+    assert report["treffer"]["ANLAGENSCHLUESSEL_BRIDGE"]["rows"] == 3
+    assert report["match_rate"]["rows"] == round(4 / 7, 6)
     assert report["bridge"] == bridge.source
 
 
@@ -442,10 +457,13 @@ def test_link_file_uses_the_bridge_in_years_with_mastr_numbers(years_dir: Path, 
         "MULTIPLE",
         "EEG_NR",
         "ANLAGENSCHLUESSEL",
-        "ANLAGENSCHLUESSEL_BRUECKE",
+        "ANLAGENSCHLUESSEL_BRIDGE",
         "NOT_FOUND",
     ]
-    assert linked.select("mastr_eeg_nr", "energietraeger").row(6) == ("EEG900000000004", "solar")
+    assert linked.select("eeg_mastr_nr_abgeglichen", "energietraeger").row(6) == (
+        "EEG900000000004",
+        "solar",
+    )
 
 
 def test_link_leaves_deleted_and_conflicting_rows_to_the_bridge(db: Path) -> None:
@@ -458,7 +476,7 @@ def test_link_leaves_deleted_and_conflicting_rows_to_the_bridge(db: Path) -> Non
             "energietraeger": ["solar", "wind"],
         }
     )
-    # EEG_Mastr_Nr, EEG_Anlagenschluessel -> treffer, mastr_eeg_nr
+    # EEG_Mastr_Nr, EEG_Anlagenschluessel -> treffer, eeg_mastr_nr_abgeglichen
     cases = [
         (("SEE900000000041", KEY_B), ("DELETED", None)),
         # Number 4 is given with the Anlagenschluessel of plant 1 too.
@@ -466,26 +484,28 @@ def test_link_leaves_deleted_and_conflicting_rows_to_the_bridge(db: Path) -> Non
         (("EEG900000000004", KEY_B), ("EEG_NR_CONFLICT", None)),
         # A number found comes before the bridge.
         (("EEG900000000001", KEY_B), ("EEG_NR", "EEG900000000001")),
-        (("SEE900000000041", KEY_SHARED), ("ANLAGENSCHLUESSEL_BRUECKE", "EEG900000000008")),
-        (("KWK900000000032", KEY_B), ("ANLAGENSCHLUESSEL_BRUECKE", "EEG900000000004")),
+        (("SEE900000000041", KEY_SHARED), ("ANLAGENSCHLUESSEL_BRIDGE", "EEG900000000008")),
+        (("KWK900000000032", KEY_B), ("ANLAGENSCHLUESSEL_BRIDGE", "EEG900000000004")),
         (("Grund_MASTRNR99", ""), ("NO_ID", None)),
     ]
     clean = pl.LazyFrame(
         {
             "eeg_mastr_nr": [nr for (nr, _), _ in cases],
             "anlagenschluessel": [key or None for (_, key), _ in cases],
-            "qa_flags": [[] if nr[0] in "ES" else ["MASTR_NR_INVALID"] for (nr, _), _ in cases],
+            "hinweise": [[] if nr[0] in "ES" else ["MASTR_NR_INVALID"] for (nr, _), _ in cases],
         },
         schema={
             "eeg_mastr_nr": pl.String(),
             "anlagenschluessel": pl.String(),
-            "qa_flags": pl.List(pl.String()),
+            "hinweise": pl.List(pl.String()),
         },
     )
 
     linked = link(clean, register, Bridge(keys, {})).collect()
 
-    assert linked.select("treffer", "mastr_eeg_nr").rows() == [expected for _, expected in cases]
+    assert linked.select("treffer", "eeg_mastr_nr_abgeglichen").rows() == [
+        expected for _, expected in cases
+    ]
 
 
 def test_link_file_writes_a_report_with_hit_rates(data_dir: Path, db: Path) -> None:
@@ -500,7 +520,7 @@ def test_link_file_writes_a_report_with_hit_rates(data_dir: Path, db: Path) -> N
         "MULTIPLE": 3,
         "ANLAGENSCHLUESSEL": 6,
         "KWK_NR": 2,
-        "ANLAGENSCHLUESSEL_BRUECKE": 0,
+        "ANLAGENSCHLUESSEL_BRIDGE": 0,
         "EEG_NR_CONFLICT": 0,
         "AMBIGUOUS": 2,
         "DELETED": 2,
@@ -510,7 +530,7 @@ def test_link_file_writes_a_report_with_hit_rates(data_dir: Path, db: Path) -> N
     assert list(report["treffer"]) == list(MATCH_CODES)
     assert report["treffer"]["NO_ID"]["eeg_zahlung"] == pytest.approx(3 * 1128.2)
     # 13 of 24 rows; the last row (NO_ID) has no payment, so 13 of 23 payments.
-    assert report["trefferquote"] == {
+    assert report["match_rate"] == {
         "rows": round(13 / 24, 6),
         "eeg_zahlung": round(13 / 23, 6),
     }
@@ -539,7 +559,7 @@ def test_link_file_without_any_match_has_a_hit_rate_of_zero(data_dir: Path, tmp_
 
     report = link_file(data_dir, 2025, "amprion", load_register(db))
 
-    assert report["trefferquote"]["rows"] == 0
+    assert report["match_rate"]["rows"] == 0
     assert report["treffer"]["NOT_FOUND"]["rows"] + report["treffer"]["NO_ID"]["rows"] == len(CASES)
 
 
@@ -605,7 +625,7 @@ def test_cli_mastr_builds_the_bridge_from_all_years(
     row = lines[3]
     assert row.split()[:5] == ["✓", "2019", "transnetbw", "7", "rows"]
     assert "+3 bridge 42.9%" in row
-    assert "ANLAGENSCHLUESSEL 1, ANLAGENSCHLUESSEL_BRUECKE 3, NOT_FOUND 3" in lines[4]
+    assert "ANLAGENSCHLUESSEL 1, ANLAGENSCHLUESSEL_BRIDGE 3, NOT_FOUND 3" in lines[4]
     assert "Bridge   +3 rows (42.9%) · 0.0 m € · 2019 +42.9%" in lines
     assert not output_paths(years_dir, 2025, "amprion").mastr.exists()
 

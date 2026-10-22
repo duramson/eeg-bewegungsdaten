@@ -38,7 +38,7 @@ STATUS = ["used", "part of year", "no rows", "some without rows", "months missin
 def energy_per_turbine(jahr: int) -> pl.DataFrame:
     return (
         matched_rows(jahr, "wind")
-        .group_by(pl.col("mastr_eeg_nr").alias("eeg_nr"))
+        .group_by(pl.col("eeg_mastr_nr_abgeglichen").alias("eeg_nr"))
         .agg(
             kwh=pl.col("strommenge").sum(),
             months=pl.col("monat").filter(pl.col("monat") > 0).n_unique(),
