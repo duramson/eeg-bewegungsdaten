@@ -54,8 +54,8 @@ def special_row(category: pl.Expr) -> pl.Expr:
 
 
 def grid_feed_in() -> pl.Expr:
-    """True for the rows whose `strommenge` is energy fed into the grid. Their sum matches the
-    energy of the EEG annual account."""
+    """True for the rows whose `strommenge` is energy fed into the grid. For 2023 to 2025, their
+    sum matches the energy of the EEG annual account."""
     return ~pl.col("sonderzeile").is_in(NOT_FED_IN).fill_null(False)
 
 

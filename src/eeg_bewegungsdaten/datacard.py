@@ -99,7 +99,7 @@ def datacard(content: dict[str, Any], schema: pl.Schema) -> str:
         "- `eeg_mastr_nr` and `eeg_mastr_nr_abgeglichen` lead to the plant in the public MaStR. "
         "There anyone can look up the town, capacity and start of operation of a plant.",
         "- The plant key is not the only text about people. `netzbetreiber` holds the names of "
-        "grid operators; a few are sole traders named after their owner. In a few thousand rows, "
+        "grid operators; a few are sole traders named after their owner. In some rows, "
         "`eeg_mastr_nr` holds a code such as `Grund_MASTRNR99` or a note such as `Noch "
         "ausstehend` instead of a number.",
         "- The export keeps every row, also those of PV plants up to 30 kW, many of them of "
