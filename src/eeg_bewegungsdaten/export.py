@@ -137,6 +137,7 @@ def export(
     if not files:
         raise ExportError(f"No matching clean files in {data_dir}; run 'ingest' first")
     by_year: dict[int, list[str]] = {}
+    hashes: dict[Path, str] = {}
     for jahr, uenb in files:
         by_year.setdefault(jahr, []).append(uenb)
         paths = output_paths(data_dir, jahr, uenb)
@@ -149,7 +150,7 @@ def export(
                 raise ExportError(f"{path} not found; run '{command}' first")
         try:
             check_columns(paths.clean, CLEAN_SCHEMA, "ingest")
-            check_match(data_dir, jahr, uenb)
+            check_match(data_dir, jahr, uenb, hashes=hashes)
             check_columns(paths.mastr, MASTR_SCHEMA, "mastr")
         except (MastrError, OutdatedFileError) as e:
             raise ExportError(str(e)) from e

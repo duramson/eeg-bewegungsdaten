@@ -33,7 +33,8 @@ rows and the rows that step 1 marked ``EEG_NR_CONFLICT``.
 Outputs per year and TSO:
 
 - ``mastr/<year>/<tso>.parquet``: one row per clean row with match type and EEG number
-- ``reports/<year>/<tso>.mastr.json``: rows and EEG payments per match type, MaStR tables used
+- ``reports/<year>/<tso>.mastr.json``: rows and EEG payments per match type, MaStR tables and
+  clean files used
 """
 
 from __future__ import annotations
@@ -292,7 +293,8 @@ class Bridge:
 
     - `keys`: `anlagenschluessel`, `plants` (number of EEG plants that rows with that key name)
       and `eeg_nr`, `energietraeger` of the first of them
-    - `source`: years used, keys with one plant and with several, for the report
+    - `source`: years used, keys with one plant and with several, and the clean files read with
+      their SHA-256, for the report
     """
 
     keys: pl.DataFrame
@@ -322,12 +324,15 @@ def load_bridge(data_dir: Path, register: Register, *, progress: Progress | None
     the clean files read so far and their number."""
     parts: list[pl.DataFrame] = [pl.DataFrame(schema=BRIDGE_SCHEMA)]
     years: set[int] = set()
+    inputs: list[dict[str, Any]] = []
     files = clean_files(data_dir)
     for i, (jahr, uenb) in enumerate(files):
         if progress is not None:
             progress(i, len(files))
         path = output_paths(data_dir, jahr, uenb).clean
         _check_clean(path)
+        # Hashed before reading, as in `link_file`.
+        inputs.append({"jahr": jahr, "uenb": uenb, "sha256": sha256_of(path)})
         keys = _bridge_keys(pl.scan_parquet(path), register)
         if not keys.is_empty():
             years.add(jahr)
@@ -340,6 +345,8 @@ def load_bridge(data_dir: Path, register: Register, *, progress: Progress | None
         "years": sorted(years),
         "keys": keys.height - several,
         "keys_with_several_plants": several,
+        # Every clean file can change the bridge, so `check_match` compares them all.
+        "clean_files": inputs,
     }
     return Bridge(keys, source)
 
@@ -497,12 +504,19 @@ def clean_files(data_dir: Path) -> list[tuple[int, str]]:
     ]
 
 
-def check_match(data_dir: Path, jahr: int, uenb: str) -> Path:
-    """Return the match file only if it was made from the current clean file."""
+def check_match(
+    data_dir: Path, jahr: int, uenb: str, *, hashes: dict[Path, str] | None = None
+) -> Path:
+    """Return the match file only if it was made from the current clean file and, if it used
+    the bridge, from the current set of clean files. `hashes` holds the SHA-256 of the clean
+    files by path; pass the same dict to check several matches, so that each file is hashed
+    once."""
+    if hashes is None:
+        hashes = {}
     paths = output_paths(data_dir, jahr, uenb)
     try:
         report = json.loads(paths.mastr_report.read_text(encoding="utf-8"))
-        current = sha256_of(paths.clean)
+        current = _sha256(paths.clean, hashes)
     except FileNotFoundError as e:
         raise MastrError(f"{jahr} {uenb}: missing matching inputs; run 'mastr' again") from e
     if not paths.mastr.is_file() or report.get("clean_sha256") != current:
@@ -510,7 +524,36 @@ def check_match(data_dir: Path, jahr: int, uenb: str) -> Path:
             f"{jahr} {uenb}: the match was made from another version of the clean file; "
             "run 'mastr' again"
         )
+    bridge = report.get("bridge")
+    if bridge is not None and not _same_clean_files(data_dir, bridge.get("clean_files"), hashes):
+        raise MastrError(
+            f"{jahr} {uenb}: the bridge of the match does not fit the current clean files; "
+            "run 'mastr' again"
+        )
     return paths.mastr
+
+
+def _same_clean_files(
+    data_dir: Path, recorded: list[dict[str, Any]] | None, hashes: dict[Path, str]
+) -> bool:
+    """Whether the clean files in `data_dir` are the `recorded` ones, with the same SHA-256.
+    Reports of older versions record none."""
+    if recorded is None:
+        return False
+    files = {(f["jahr"], f["uenb"]): f["sha256"] for f in recorded}
+    if set(files) != set(clean_files(data_dir)):
+        return False
+    return all(
+        _sha256(output_paths(data_dir, jahr, uenb).clean, hashes) == sha256
+        for (jahr, uenb), sha256 in files.items()
+    )
+
+
+def _sha256(path: Path, hashes: dict[Path, str]) -> str:
+    """SHA-256 of `path`, from `hashes` if it was hashed before."""
+    if path not in hashes:
+        hashes[path] = sha256_of(path)
+    return hashes[path]
 
 
 def _check_clean(path: Path) -> None:

@@ -377,6 +377,7 @@ uv run eeg-bewegungsdaten mastr
 
 - `mastr` matches all clean files, or those chosen with `--year` and `--uenb`. For the bridge
   (step 4 below) it reads all clean files in any case, so run `ingest` for all years first.
+  If `ingest` later changes, adds or removes a clean file, run `mastr` for all years again.
 - It looks for the database where open-MaStR puts it: `$SQLITE_DATABASE_PATH`, else
   `data/sqlite/open-mastr.db` in `$MASTR_PROJECT_HOME_DIR` or `~/.open-MaStR`. Give another
   file with `--db`.
@@ -463,7 +464,8 @@ over grid areas of others. How many rows the bridge matches, and how it was chec
 
 `reports/<year>/<tso>.mastr.json` holds rows and EEG payments per `treffer`, the shares matched,
 the database file and tables used, with open-MaStR's export date (`DatumDownload`), and under
-`bridge` the years and the number of Anlagenschluessel of the bridge.
+`bridge` the years and the number of Anlagenschluessel of the bridge, and the clean files it
+was built from with their SHA-256.
 
 ```python
 import polars as pl
@@ -534,6 +536,9 @@ uv run eeg-bewegungsdaten export
   `text` or `quarantine`, whose raw lines hold the plant keys.
 - Each MaStR report records the SHA-256 of its clean input. Export and the analysis scripts
   refuse matches whose input has changed, even if file names and line numbers still agree.
+  The bridge reads the clean files of all years. So a match made with the bridge is also
+  refused if any clean file was changed, added or removed since, or if its report does not
+  list them, as in reports of earlier versions. Then run `mastr` again.
 - It writes one file per year with the rows of all TSOs:
   `~/.eeg-bewegungsdaten/export/eeg-bewegungsdaten-<year>.parquet`.
 - `sources.txt` and `sources.json` hold the source notes for the EEG data and for the MaStR,
