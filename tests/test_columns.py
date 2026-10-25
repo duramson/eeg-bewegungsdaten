@@ -5,7 +5,14 @@ from __future__ import annotations
 import polars as pl
 import pytest
 
-from eeg_bewegungsdaten.columns import COLUMNS, ENERGIETRAEGER, VERAEUSSERUNGSFORM, describe
+from eeg_bewegungsdaten.columns import (
+    _EXPORT_CODES,
+    COLUMNS,
+    ENERGIETRAEGER,
+    VERAEUSSERUNGSFORM,
+    describe,
+    describe_export,
+)
 from eeg_bewegungsdaten.export import ANLAGE_ID_SCHEMA, EXPORT_SCHEMA
 from eeg_bewegungsdaten.links import UENB
 from eeg_bewegungsdaten.mastr import MASTR_SCHEMA, TABLES
@@ -64,3 +71,14 @@ def test_codes_match_the_values_the_tool_writes() -> None:
     assert set(COLUMNS["uenb"].codes) == set(UENB)
     assert set(ENERGIETRAEGER) == set(TABLES)
     assert set(VERAEUSSERUNGSFORM) == set(VERAEUSSERUNGSFORM_CODES.values())
+
+
+def test_the_export_entries_name_nothing_the_export_does_not_hold() -> None:
+    exported = describe_export(EXPORT_SCHEMA)
+    texts = [column.description for column, _ in exported]
+    texts += [meaning for column, _ in exported for meaning in column.codes.values()]
+    for absent in ("In `text`", "text layer", "eeg_mastr_nrs_abgeglichen"):
+        assert [text for text in texts if absent in text] == [], absent
+    # Every replaced meaning belongs to a code of the export.
+    codes = {(column.name, code) for column, _ in exported for code in column.codes}
+    assert set(_EXPORT_CODES) <= codes

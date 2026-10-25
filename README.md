@@ -547,10 +547,11 @@ uv run eeg-bewegungsdaten export
   for whoever publishes the export.
 - `README.md` is the datacard in English, for whoever gets only the export: what the data are,
   years, TSOs and rows, every column with type, unit and meaning, notes on summing energy, on the
-  MaStR data and on the pseudonym, the licenses and the source notes. It has no tables, as CKAN
+  MaStR data and on personal data, the licenses and the source notes. It has no tables, as CKAN
   does not render them.
 - `--year 2025` exports only that year. `--out <folder>` writes to another folder. A folder
-  with the export of other years is refused, so that the source notes always fit the files.
+  with the export of other years is refused, so that the source notes always fit the files. So
+  is a folder with a `README.md` that `export` did not write.
 - For all years it takes about 20 seconds and up to 4 GB of memory.
 
 ### Columns of the export
