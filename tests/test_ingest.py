@@ -3,6 +3,7 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 import json
+from collections.abc import Iterable
 from pathlib import Path
 
 import httpx
@@ -12,9 +13,11 @@ import pytest
 import eeg_bewegungsdaten
 from eeg_bewegungsdaten import cli
 from eeg_bewegungsdaten.download import ArchivedFile, download, meta_path
-from eeg_bewegungsdaten.ingest import ingest, latest_uploads, scan
+from eeg_bewegungsdaten.export import ExportError, export
+from eeg_bewegungsdaten.ingest import _merge, ingest, latest_uploads, scan
 from eeg_bewegungsdaten.links import PAGE_URL, find_links
-from eeg_bewegungsdaten.paths import output_paths
+from eeg_bewegungsdaten.mastr import MastrError, link_file, load_bridge, load_register
+from eeg_bewegungsdaten.paths import UnfinishedIngestError, output_paths, staged
 from eeg_bewegungsdaten.quality import check
 from eeg_bewegungsdaten.reader import data_size
 from eeg_bewegungsdaten.schema import (
@@ -27,10 +30,13 @@ from eeg_bewegungsdaten.schema import (
 from tests.builders import (
     HEADER,
     HEADER_TRANSNETBW_1,
+    KEY,
     TENNET_PART,
     archive,
     classified,
     csv,
+    make_mastr_db,
+    plants,
     row,
     zip_bytes,
 )
@@ -137,11 +143,21 @@ def test_clean_rows_can_be_rebuilt_from_the_text_layer(
     assert quarantine.drop("rohzeile").equals(pl.read_parquet(outputs.quarantine).drop("rohzeile"))
 
 
+def leftovers(data_dir: Path) -> list[Path]:
+    """Temporary and staged files, and lists of files still to be replaced."""
+    return [
+        p
+        for p in data_dir.rglob("*")
+        if p.name.startswith(".")
+        or p.suffix in (".tmp", ".new")
+        or p.name.endswith(".pending.json")
+    ]
+
+
 def test_ingest_leaves_no_temporary_files(data_dir: Path) -> None:
     ingest(archive(data_dir, amprion_members()), data_dir)
 
-    hidden = [p for p in data_dir.rglob("*") if p.name.startswith(".") or p.suffix == ".tmp"]
-    assert hidden == []
+    assert leftovers(data_dir) == []
 
 
 def test_ingest_twice_gives_the_same_rows(data_dir: Path) -> None:
@@ -536,6 +552,79 @@ def test_incomplete_new_upload_does_not_replace_existing_outputs(
     assert failed
     assert all("expected [1, 2, 3, 4]" in line for line in failed)
     assert {path: path.read_bytes() for path in written} == before
+
+
+def test_a_failure_while_writing_keeps_the_old_files(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ingest(archive(data_dir, {"data.csv": csv(HEADER, row(energy="10"))}), data_dir)
+    new = archive(data_dir, {"data.csv": csv(HEADER, row(energy="20"))}, file_id=NEWER_ID)
+    before = outputs_of(data_dir, 2025, "amprion")
+    clean = staged(output_paths(data_dir, 2025, "amprion").clean)
+
+    def fail_on_clean(parts: Iterable[Path], target: Path) -> None:
+        if target == clean:
+            raise OSError("simulated disk full")
+        _merge(parts, target)
+
+    monkeypatch.setattr("eeg_bewegungsdaten.ingest._merge", fail_on_clean)
+    with pytest.raises(OSError, match="simulated disk full"):
+        ingest(new, data_dir)
+
+    assert outputs_of(data_dir, 2025, "amprion") == before
+    assert leftovers(data_dir) == []
+
+
+def test_a_run_stopped_while_replacing_is_refused_until_ingest_finishes_it(
+    data_dir: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    db = make_mastr_db(
+        tmp_path / "open-mastr.db", {"AnlagenEegSolar": plants(("EEG900000000001", KEY))}
+    )
+    register = load_register(db)
+    ingest(archive(data_dir, {"data.csv": csv(HEADER, row(energy="10"))}), data_dir)
+    link_file(data_dir, 2025, "amprion", register)
+    new = archive(data_dir, {"data.csv": csv(HEADER, row(energy="20"))}, file_id=NEWER_ID)
+    outputs = output_paths(data_dir, 2025, "amprion")
+    replace = Path.replace
+
+    def fail_on_clean(self: Path, target: Path) -> Path:
+        if target == outputs.clean:
+            raise OSError("simulated failure")
+        return replace(self, target)
+
+    # The new text layer is in place, the old clean layer is not replaced yet.
+    with monkeypatch.context() as patched:
+        patched.setattr(Path, "replace", fail_on_clean)
+        with pytest.raises(OSError, match="simulated failure"):
+            ingest(new, data_dir)
+    assert pl.read_parquet(outputs.text)["strommenge"].to_list() == ["20"]
+    assert pl.read_parquet(outputs.clean)["strommenge"].to_list() == [10]
+
+    unfinished = r"2025 amprion: ingest stopped .* run 'ingest' again"
+    for layer in ("text", "clean", "quarantine"):
+        with pytest.raises(UnfinishedIngestError, match=unfinished):
+            scan(data_dir, layer=layer)
+    with pytest.raises(MastrError, match=unfinished):
+        load_bridge(data_dir, register)
+    with pytest.raises(MastrError, match=unfinished):
+        link_file(data_dir, 2025, "amprion", register)
+    with pytest.raises(ExportError, match=unfinished):
+        export(data_dir)
+
+    # The next run puts the new files in place before it reads the upload, which fails here.
+    new.path.unlink()
+    with pytest.raises(FormatError, match="missing or truncated"):
+        ingest(new, data_dir)
+    assert "finished replacing the files of an earlier ingest" in caplog.text
+    assert scan(data_dir).collect()["strommenge"].to_list() == [20]
+    report = json.loads(outputs.report.read_text(encoding="utf-8"))
+    assert [source["file_id"] for source in report["sources"]] == [NEWER_ID]
+    assert report["sums_clean"]["strommenge"] == 20
+    assert leftovers(data_dir) == []
 
 
 def test_multipart_upload_without_expected_parts_is_refused(data_dir: Path) -> None:

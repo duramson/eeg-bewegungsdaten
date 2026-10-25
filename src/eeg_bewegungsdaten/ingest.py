@@ -8,6 +8,8 @@ Outputs per year and TSO:
 - ``reports/<year>/<tso>.json``: source file, row counts, codes and sums
 
 Chunks are written as temporary Parquet parts and merged at the end, so memory stays bounded.
+All four are written next to the old ones first and then put in place together
+(`replace_together`): `scan`, `mastr` and `export` refuse a mix of old and new files.
 """
 
 from __future__ import annotations
@@ -25,10 +27,14 @@ import polars as pl
 from eeg_bewegungsdaten._version import __version__
 from eeg_bewegungsdaten.download import ArchivedFile, archived_files
 from eeg_bewegungsdaten.paths import (
+    check_finished,
     clean_dir,
     default_data_dir,
+    finish_replacing,
     output_paths,
     quarantine_dir,
+    replace_together,
+    staged,
     text_dir,
     utc_now,
     write_atomic,
@@ -122,10 +128,15 @@ def ingest(
     files = [upload] if isinstance(upload, ArchivedFile) else list(upload)
     if not files:
         raise ValueError("Nothing to ingest")
-    _check_parts(files)
     jahr = int(files[0].meta["year"])
     uenb = str(files[0].meta["uenb"])
     outputs = output_paths(data_dir, jahr, uenb)
+    replaced = [outputs.text, outputs.clean, outputs.quarantine, outputs.report]
+    # The new files of a run that stopped while it replaced them are complete: put them in place
+    # first, whatever happens to this run.
+    if finish_replacing(data_dir, outputs.pending):
+        log.warning("%s %s: finished replacing the files of an earlier ingest", jahr, uenb)
+    _check_parts(files)
     log.debug("Reading %s %s from %s", jahr, uenb, ", ".join(str(f.path) for f in files))
     total = sum(data_size(f.path) for f in files) if progress is not None else None
     positions: dict[tuple[str, str], int] = {}
@@ -201,47 +212,53 @@ def ingest(
         if not members:
             raise FormatError(f"{', '.join(str(f.path) for f in files)}: no data files in the ZIP")
         assert rows_clean + rows_quarantine == rows_raw, (jahr, uenb)
-        _merge(text_parts, outputs.text)
-        _merge(clean_parts, outputs.clean)
-        _merge(quarantine_parts, outputs.quarantine)
+        # The new files go next to the old ones first, so that a failure up to the end of this
+        # block leaves the old ones as they are.
+        _merge(text_parts, staged(outputs.text))
+        _merge(clean_parts, staged(outputs.clean))
+        _merge(quarantine_parts, staged(outputs.quarantine))
+        report = {
+            "jahr": jahr,
+            "uenb": uenb,
+            "sources": [
+                {
+                    key: f.meta.get(key)
+                    for key in (
+                        "url",
+                        "filename",
+                        "file_id",
+                        "part",
+                        "published",
+                        "sha256",
+                        "size",
+                        "downloaded_at",
+                    )
+                }
+                for f in files
+            ],
+            "rows": {"raw": rows_raw, "clean": rows_clean, "quarantine": rows_quarantine},
+            "quarantine": dict(sorted(codes.items())),
+            "qa_flags": dict(sorted(flags.items())),
+            # None for amounts that the files do not have, such as EEG_Einnahmen before 2024.
+            "sums_clean": {c: round(sums[c], 3) if c in sums else None for c in NUMBER_COLUMNS},
+            "members": list(members.values()),
+            "skipped_members": [name for f in files for name in skipped_members(f.path)],
+            "outputs": {
+                "text": str(outputs.text),
+                "clean": str(outputs.clean),
+                "quarantine": str(outputs.quarantine),
+            },
+            "created_at": utc_now(),
+            "tool_version": __version__,
+        }
+        write_json(staged(outputs.report), report)
+    except BaseException:
+        for path in replaced:
+            staged(path).unlink(missing_ok=True)
+        raise
     finally:
         shutil.rmtree(work, ignore_errors=True)
-
-    report = {
-        "jahr": jahr,
-        "uenb": uenb,
-        "sources": [
-            {
-                key: f.meta.get(key)
-                for key in (
-                    "url",
-                    "filename",
-                    "file_id",
-                    "part",
-                    "published",
-                    "sha256",
-                    "size",
-                    "downloaded_at",
-                )
-            }
-            for f in files
-        ],
-        "rows": {"raw": rows_raw, "clean": rows_clean, "quarantine": rows_quarantine},
-        "quarantine": dict(sorted(codes.items())),
-        "qa_flags": dict(sorted(flags.items())),
-        # None for amounts that the files do not have, such as EEG_Einnahmen before 2024.
-        "sums_clean": {c: round(sums[c], 3) if c in sums else None for c in NUMBER_COLUMNS},
-        "members": list(members.values()),
-        "skipped_members": [name for f in files for name in skipped_members(f.path)],
-        "outputs": {
-            "text": str(outputs.text),
-            "clean": str(outputs.clean),
-            "quarantine": str(outputs.quarantine),
-        },
-        "created_at": utc_now(),
-        "tool_version": __version__,
-    }
-    write_json(outputs.report, report)
+    replace_together(data_dir, outputs.pending, replaced)
     return report
 
 
@@ -254,8 +271,10 @@ def scan(data_dir: Path | None = None, *, layer: Layer = "clean") -> pl.LazyFram
     """One layer of every year and TSO as one LazyFrame: ``"clean"`` rows in the common
     schema, ``"quarantine"`` for lines that could not be read, ``"text"`` for every line with
     all fields as published. Raises `OutdatedFileError` if a file has the columns of an older
-    version of the tool."""
+    version of the tool, and `UnfinishedIngestError` if `ingest` stopped while it replaced the
+    files of a year and TSO."""
     data_dir = data_dir or default_data_dir()
     for path in sorted(_LAYER_DIRS[layer](data_dir).glob("*/*.parquet")):
+        check_finished(path)
         check_columns(path, _LAYER_SCHEMAS[layer], "ingest")
     return pl.scan_parquet(_LAYER_DIRS[layer](data_dir) / "*" / "*.parquet")
