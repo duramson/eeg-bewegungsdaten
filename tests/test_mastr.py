@@ -728,7 +728,9 @@ def bridged_dir(tmp_path: Path, bridge_db: Path) -> Path:
     return data_dir
 
 
-STALE_BRIDGE = "the bridge of the match does not fit the current clean files; run 'mastr' again"
+STALE_BRIDGE = (
+    "the bridge of the match does not fit the current clean files; run 'mastr' for all years again"
+)
 
 
 def test_check_match_rejects_a_bridge_match_after_another_clean_file_changed(
@@ -768,6 +770,18 @@ def test_check_match_rejects_a_bridge_match_after_a_clean_file_was_removed(
         check_match(bridged_dir, 2019, "amprion")
     match_all(bridged_dir, bridge_db)
     assert matched(bridged_dir, 2019) == ("NOT_FOUND", None)
+
+
+def test_check_match_rejects_a_bridge_match_if_a_clean_file_disappears_meanwhile(
+    bridged_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listed = clean_files(bridged_dir)
+    output_paths(bridged_dir, 2025, "amprion").clean.unlink()
+    # As if the file was removed after `clean_files` listed it.
+    monkeypatch.setattr(mastr, "clean_files", lambda data_dir: listed)
+
+    with pytest.raises(MastrError, match=STALE_BRIDGE):
+        check_match(bridged_dir, 2019, "amprion")
 
 
 def test_check_match_rejects_a_bridge_match_of_an_older_version(bridged_dir: Path) -> None:

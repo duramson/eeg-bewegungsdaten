@@ -538,7 +538,7 @@ uv run eeg-bewegungsdaten export
   refuse matches whose input has changed, even if file names and line numbers still agree.
   The bridge reads the clean files of all years. So a match made with the bridge is also
   refused if any clean file was changed, added or removed since, or if its report does not
-  list them, as in reports of earlier versions. Then run `mastr` again.
+  list them, as in reports of earlier versions. Then run `mastr` for all years again.
 - It writes one file per year with the rows of all TSOs:
   `~/.eeg-bewegungsdaten/export/eeg-bewegungsdaten-<year>.parquet`.
 - `sources.txt` and `sources.json` hold the source notes for the EEG data and for the MaStR,

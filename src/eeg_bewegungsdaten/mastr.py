@@ -528,7 +528,7 @@ def check_match(
     if bridge is not None and not _same_clean_files(data_dir, bridge.get("clean_files"), hashes):
         raise MastrError(
             f"{jahr} {uenb}: the bridge of the match does not fit the current clean files; "
-            "run 'mastr' again"
+            "run 'mastr' for all years again"
         )
     return paths.mastr
 
@@ -543,10 +543,14 @@ def _same_clean_files(
     files = {(f["jahr"], f["uenb"]): f["sha256"] for f in recorded}
     if set(files) != set(clean_files(data_dir)):
         return False
-    return all(
-        _sha256(output_paths(data_dir, jahr, uenb).clean, hashes) == sha256
-        for (jahr, uenb), sha256 in files.items()
-    )
+    try:
+        return all(
+            _sha256(output_paths(data_dir, jahr, uenb).clean, hashes) == sha256
+            for (jahr, uenb), sha256 in files.items()
+        )
+    except FileNotFoundError:
+        # Removed after `clean_files` listed it.
+        return False
 
 
 def _sha256(path: Path, hashes: dict[Path, str]) -> str:
