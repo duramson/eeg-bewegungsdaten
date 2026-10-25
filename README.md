@@ -154,6 +154,7 @@ The data folder is `~/.eeg-bewegungsdaten`. Change it with the environment varia
 ├── reports/2025/amprion.json
 ├── reports/2025/amprion.mastr.json
 ├── export/eeg-bewegungsdaten-2025.parquet
+├── export/README.md
 ├── export/sources.txt
 ├── export/sources.json
 ├── export/datapackage.json
@@ -544,6 +545,10 @@ uv run eeg-bewegungsdaten export
   files and the licenses. The EEG data have no settled license, and it says so. It names no
   person unless you give `--contributor "<name>"` and `--contributor-url <ORCID or profile>`,
   for whoever publishes the export.
+- `README.md` is the datacard in English, for whoever gets only the export: what the data are,
+  years, TSOs and rows, every column with type, unit and meaning, notes on summing energy, on the
+  MaStR data and on the pseudonym, the licenses and the source notes. It has no tables, as CKAN
+  does not render them.
 - `--year 2025` exports only that year. `--out <folder>` writes to another folder. A folder
   with the export of other years is refused, so that the source notes always fit the files.
 - For all years it takes about 20 seconds and up to 4 GB of memory.

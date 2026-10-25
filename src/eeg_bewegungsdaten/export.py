@@ -8,6 +8,8 @@ Outputs, by default in ``export/``:
   ``treffer``, ``eeg_mastr_nr_abgeglichen`` and ``energietraeger`` from ``mastr``
 - ``sources.txt`` and ``sources.json``: source notes for the EEG data and the MaStR, and the
   source files with their SHA-256
+- ``README.md`` and ``datapackage.json``: the datacard and the metadata (OEMetadata v2), from
+  the content of ``sources.json`` and the column dictionary
 
 ``anlage_id`` is drawn at random for every TSO and Anlagenschluessel, so it cannot be computed
 from the key. The mapping stays in ``anlage_id.parquet`` in the data folder, so that a key keeps
@@ -35,6 +37,7 @@ from typing import Any
 import polars as pl
 
 from eeg_bewegungsdaten._version import __version__
+from eeg_bewegungsdaten.datacard import DATACARD, datacard
 from eeg_bewegungsdaten.datapackage import DATAPACKAGE_JSON, Contributor, datapackage
 from eeg_bewegungsdaten.links import PAGE_URL, UENB, UENB_NAMES
 from eeg_bewegungsdaten.mastr import HITS, MASTR_SCHEMA, MastrError, check_match, clean_files
@@ -208,6 +211,7 @@ def export(
     }
     write_json(out_dir / SOURCES_JSON, content)
     write_json(out_dir / DATAPACKAGE_JSON, datapackage(content, EXPORT_SCHEMA, contributor))
+    write_text(out_dir / DATACARD, datacard(content, EXPORT_SCHEMA))
     write_text(out_dir / SOURCES_TXT, _sources_text(content))
     return content
 

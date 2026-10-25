@@ -55,7 +55,8 @@ KODIERUNG = {
     "undecodable": "the line is neither UTF-8 nor cp1252",
 }
 
-_AS_PUBLISHED = (
+# Ends the description of the columns that `text` holds as published; the datacard leaves it out.
+AS_PUBLISHED = (
     " In `text`, the field as published: not trimmed, empty fields are '', columns the file "
     "does not have are null."
 )
@@ -80,46 +81,46 @@ COLUMNS: dict[str, Column] = {
             "eeg_mastr_nr",
             "EEG number of the plant in the Marktstammdatenregister (MaStR), as the TSO "
             "published it, from 2020; see `hinweise`. The number found in the MaStR is "
-            "`eeg_mastr_nr_abgeglichen`." + _AS_PUBLISHED,
+            "`eeg_mastr_nr_abgeglichen`." + AS_PUBLISHED,
             legend="EEG_Mastr_Nr",
         ),
         Column(
             "anlagenschluessel",
             "Plant key (EEG-Anlagenschluessel), free text; it may contain names of people or "
-            "streets, so the export leaves it out." + _AS_PUBLISHED,
+            "streets, so the export leaves it out." + AS_PUBLISHED,
             legend="EEG_Anlagenschluessel",
         ),
         Column(
             "nb_mastr_nr",
-            "MaStR number of the grid operator, from 2020." + _AS_PUBLISHED,
+            "MaStR number of the grid operator, from 2020." + AS_PUBLISHED,
             legend="NB_Mastr_Nr",
         ),
         Column(
             "nb_bnr",
-            "BDEW number of the grid operator: most files up to 2023, TenneT 2025." + _AS_PUBLISHED,
+            "BDEW number of the grid operator: most files up to 2023, TenneT 2025." + AS_PUBLISHED,
             legend="NB_BNR",
         ),
         Column(
             "netzbetreiber",
             "Name of the grid operator: the files with `nb_bnr`, except Amprion 2018 and 2019."
-            + _AS_PUBLISHED,
+            + AS_PUBLISHED,
             legend="Netzbetreiber",
         ),
         Column(
             "uenb_mastr_nr",
-            "MaStR number of the TSO, from 2020." + _AS_PUBLISHED,
+            "MaStR number of the TSO, from 2020." + AS_PUBLISHED,
             legend="UENB_Mastr_Nr",
         ),
         Column(
             "veraeusserungsform",
             "Form of sale: how the electricity was sold and paid. Null before 2020, except "
-            "Amprion 2018 (column TYP)." + _AS_PUBLISHED,
+            "Amprion 2018 (column TYP)." + AS_PUBLISHED,
             legend="Veraeusserungsform",
             codes=VERAEUSSERUNGSFORM,
         ),
         Column(
             "verguetungskategorie",
-            "Payment category of the TSOs' legend." + _AS_PUBLISHED,
+            "Payment category of the TSOs' legend." + AS_PUBLISHED,
             legend="Verguetungskategorie",
         ),
         Column(
@@ -132,32 +133,32 @@ COLUMNS: dict[str, Column] = {
             "strommenge",
             "Energy of the row. Some rows repeat or deduct energy of other rows, see "
             "`sonderzeile`. The legend states no unit; the sums match the EEG annual account in "
-            "kWh." + _AS_PUBLISHED,
+            "kWh." + AS_PUBLISHED,
             unit="kWh",
             legend="Strommenge",
         ),
         Column(
             "eeg_zahlung",
-            "EEG payment to the plant operator." + _AS_PUBLISHED,
+            "EEG payment to the plant operator." + AS_PUBLISHED,
             unit="EUR",
             legend="EEG_Zahlung",
         ),
         Column(
             "eeg_einnahmen",
-            "EEG receipts, from 2024." + _AS_PUBLISHED,
+            "EEG receipts, from 2024." + AS_PUBLISHED,
             unit="EUR",
             legend="EEG_Einnahmen",
         ),
         Column(
             "vermiedene_netzentgelte",
-            "Avoided grid fees (vNNE), until 2023." + _AS_PUBLISHED,
+            "Avoided grid fees (vNNE), until 2023." + AS_PUBLISHED,
             unit="EUR",
             legend="Vermiedene_Netzentgelte",
         ),
         Column(
             "monat",
             "Month 1 to 12, or 0 for the annual value; always 0 before 2021. Other values, or "
-            "null, come with `MONAT_INVALID` in `hinweise`." + _AS_PUBLISHED,
+            "null, come with `MONAT_INVALID` in `hinweise`." + AS_PUBLISHED,
             legend="Monat",
         ),
         Column(

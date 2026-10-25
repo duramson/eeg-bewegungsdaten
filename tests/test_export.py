@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,8 @@ import pytest
 from oemetadata.v2.v20.schema import OEMETADATA_V20_SCHEMA
 
 from eeg_bewegungsdaten import cli
-from eeg_bewegungsdaten.columns import COLUMNS
+from eeg_bewegungsdaten.columns import AS_PUBLISHED, COLUMNS
+from eeg_bewegungsdaten.datacard import DATACARD, datacard
 from eeg_bewegungsdaten.datapackage import DATAPACKAGE_JSON
 from eeg_bewegungsdaten.export import (
     ANLAGE_ID_SCHEMA,
@@ -89,6 +91,7 @@ def test_export_writes_one_file_per_year_and_the_sources(data_dir: Path) -> None
 
     names = sorted(path.name for path in (data_dir / "export").iterdir())
     assert names == [
+        "README.md",
         "datapackage.json",
         "eeg-bewegungsdaten-2024.parquet",
         "eeg-bewegungsdaten-2025.parquet",
@@ -322,6 +325,78 @@ def test_cli_export_names_the_contributor(data_dir: Path) -> None:
         (contributor,) = resource["contributors"]
         assert (contributor["title"], contributor["path"]) == ("A. Person", orcid)
         assert contributor["roles"] == ["DataCurator"]
+
+
+def read_datacard(data_dir: Path) -> str:
+    return (data_dir / "export" / DATACARD).read_text(encoding="utf-8")
+
+
+def section(text: str, heading: str) -> str:
+    return text.split(f"\n## {heading}\n")[1].split("\n## ")[0]
+
+
+def test_datacard_is_written_from_sources_json(data_dir: Path) -> None:
+    export(data_dir)
+
+    text = read_datacard(data_dir)
+    content = json.loads((data_dir / "export" / "sources.json").read_text(encoding="utf-8"))
+    assert text == datacard(content, EXPORT_SCHEMA)
+    assert text.startswith("# EEG-Bewegungsdaten 2024 to 2025, cleaned and matched")
+    assert (
+        "- `eeg-bewegungsdaten-2025.parquet`: 2025, 4 rows of 50Hertz Transmission GmbH, Amprion "
+        "GmbH and TransnetBW GmbH; 2 plants (`anlage_id`), 2 rows without one; 75.0% of the rows "
+        "matched with the MaStR." in text
+    )
+    # The codes the filter of grid feed-in leaves out, the MaStR export and the pseudonym
+    assert (
+        "`REPEATED_ENERGY`, `SELF_CONSUMPTION`, `PAID_SELF_CONSUMPTION` or "
+        "`SELF_CONSUMPTION_DEDUCTION`. The sum of the other rows matches" in text
+    )
+    assert "(MaStR), export of 2026-10-17." in text
+    assert "- `anlage_id` replaces the plant key" in text
+    # Markdown tables need pipes, and CKAN does not render them.
+    assert "|" not in text
+    # The card is read outside the repository.
+    assert all(link.startswith("https://") for link in re.findall(r"\]\(([^)]*)\)", text))
+
+
+def test_datacard_names_every_column_with_type_unit_and_meaning(data_dir: Path) -> None:
+    export(data_dir)
+
+    columns = section(read_datacard(data_dir), "Columns")
+    items = {line.split("`")[1]: line for line in columns.splitlines() if line.startswith("- `")}
+    assert list(items) == list(EXPORT_SCHEMA)
+    for name, dtype in EXPORT_SCHEMA.items():
+        column = COLUMNS[name]
+        unit = f", {column.unit}" if column.unit else ""
+        meaning = column.description.removesuffix(AS_PUBLISHED)
+        assert items[name] == f"- `{name}`: {dtype}{unit}. {meaning}"
+        for code, text in column.codes.items():
+            assert f"\n    - `{code}`: {text}\n" in columns
+    assert items["strommenge"].startswith("- `strommenge`: Float64, kWh. Energy of the row.")
+    assert items["eeg_zahlung"].startswith("- `eeg_zahlung`: Float64, EUR. ")
+    # `text` is not part of the export.
+    assert "In `text`" not in columns
+
+
+def test_datacard_claims_no_license_for_the_eeg_data(data_dir: Path) -> None:
+    content = export(data_dir)
+
+    text = read_datacard(data_dir)
+    eeg, mastr = section(text, "Licenses").strip().splitlines()
+    assert eeg.startswith(
+        "- [EEG-Bewegungsdaten: no settled license]"
+        "(https://github.com/duramson/eeg-bewegungsdaten#data-license)."
+    )
+    assert "Datenlizenz" not in eeg
+    assert mastr.startswith(f"- [{DL_DE_BY}](https://www.govdata.de/dl-de/by-2-0) (DL-DE-BY-2.0)")
+    mastr_columns = "`treffer`, `eeg_mastr_nr_abgeglichen` and `energietraeger`"
+    assert f"for the MaStR data in {mastr_columns}." in mastr
+    assert text.count("DL-DE-BY-2.0") == 1
+    assert not any(name in text for name in ("CC0", "CC-BY", "CC BY", "ODbL", "dl-de/zero"))
+    notes = section(text, "Source notes")
+    assert f"- {content['source_notes']['eeg']}\n" in notes
+    assert f"- {content['source_notes']['mastr']}\n" in notes
 
 
 def test_sources_name_every_mastr_export_date(data_dir: Path) -> None:
