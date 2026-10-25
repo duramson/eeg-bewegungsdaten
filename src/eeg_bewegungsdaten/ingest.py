@@ -254,8 +254,8 @@ def ingest(
         write_json(staged(outputs.report), report)
         write_pending(data_dir, outputs.pending, replaced)
     except BaseException:
-        # Nothing is renamed yet. The list goes first: staged files without it are never put in
-        # place, while staged files missing from it would be taken as renamed.
+        # Nothing is renamed yet. The list goes first: staged files without a list are never put
+        # in place, while a list whose staged files were deleted would take them as renamed.
         outputs.pending.unlink(missing_ok=True)
         for path in replaced:
             staged(path).unlink(missing_ok=True)
