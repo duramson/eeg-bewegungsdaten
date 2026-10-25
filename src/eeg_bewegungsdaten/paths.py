@@ -23,7 +23,7 @@ class Outputs(NamedTuple):
     report: Path
     mastr: Path
     mastr_report: Path
-    # Lists text, clean, quarantine and report while `ingest` replaces them; see `replace_together`.
+    # Lists text, clean, quarantine and report while `ingest` replaces them; see `write_pending`.
     pending: Path
 
 
@@ -114,21 +114,21 @@ def write_json(path: Path, data: Any) -> None:
 
 
 def staged(path: Path) -> Path:
-    """Where the new version of `path` waits until `replace_together` puts it in place."""
+    """Where the new version of `path` waits until `finish_replacing` puts it in place."""
     return path.with_name(path.name + ".new")
 
 
-def replace_together(data_dir: Path, pending: Path, paths: Sequence[Path]) -> None:
-    """Replace each of `paths`, files in `data_dir`, with its `staged` version, as one step for
-    the readers that call `check_finished`: write the list `pending`, rename, delete `pending`.
-    If a rename fails, `pending` stays, and `finish_replacing` does the renames still to do."""
+def write_pending(data_dir: Path, pending: Path, paths: Sequence[Path]) -> None:
+    """Write the list `pending` of `paths`, files in `data_dir` whose `staged` versions are
+    complete. From then on, the readers that call `check_finished` refuse them, until
+    `finish_replacing` has renamed them all; so they never take a mix of old and new files."""
     write_json(pending, {"replace": [path.relative_to(data_dir).as_posix() for path in paths]})
-    finish_replacing(data_dir, pending)
 
 
 def finish_replacing(data_dir: Path, pending: Path) -> bool:
     """Do the renames that `pending` lists and that are still to do, then delete it; return
-    whether it existed. A file without a staged version was renamed already."""
+    whether it existed. A file without a staged version was renamed already. If a rename fails,
+    `pending` stays, and the next call does the rest."""
     if not pending.is_file():
         return False
     for name in json.loads(pending.read_text(encoding="utf-8"))["replace"]:

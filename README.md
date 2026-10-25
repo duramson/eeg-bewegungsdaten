@@ -143,14 +143,18 @@ The data folder is `~/.eeg-bewegungsdaten`. Change it with the environment varia
 ### How outputs are replaced
 
 - `ingest` writes the new `text`, `clean`, `quarantine` and report of a year and TSO next to the
-  old ones first, as `.new` files. If that fails, the old files stay as they are.
-- Then it writes the list of the four files to `reports/<year>/<tso>.pending.json`, renames the
-  files and deletes the list.
-- If a run stops between the renames, the list stays, and the files are a mix of old and new.
-  `scan`, `mastr` and `export` refuse that year and TSO until the next `ingest` finishes the
-  renames. It does so first, even if it cannot read the upload afterwards.
-- Tools that read the files directly, such as DuckDB, do not check the list. If you find one,
-  run `ingest` again before you read the files.
+  old ones first, as `.new` files, and then the list of the four files to
+  `reports/<year>/<tso>.pending.json`. If that fails, the old files stay as they are.
+- Then it renames the files and deletes the list.
+- If a run stops between the renames, the list stays, and the files of that year and TSO are a
+  mix of old and new. Until the next `ingest` of that year and TSO finishes the renames, `scan`
+  and `mastr` refuse to run at all, as they read every year and TSO, and `export` stops if that
+  year is among those it exports. `ingest` finishes the renames first, even if it cannot read
+  the upload afterwards.
+- Do not delete `.new` files while a `.pending.json` file exists: `ingest` takes a missing
+  `.new` file as renamed already and would keep the mix.
+- Tools that read the files directly, such as DuckDB, do not check the list. If you find a
+  `.pending.json` file, run `ingest` again before you read the files.
 
 ## Output
 

@@ -8,8 +8,8 @@ Outputs per year and TSO:
 - ``reports/<year>/<tso>.json``: source file, row counts, codes and sums
 
 Chunks are written as temporary Parquet parts and merged at the end, so memory stays bounded.
-All four are written next to the old ones first and then put in place together
-(`replace_together`): `scan`, `mastr` and `export` refuse a mix of old and new files.
+All four are written next to the old ones first, listed (`write_pending`) and then put in place
+(`finish_replacing`): `scan`, `mastr` and `export` refuse a mix of old and new files.
 """
 
 from __future__ import annotations
@@ -33,12 +33,12 @@ from eeg_bewegungsdaten.paths import (
     finish_replacing,
     output_paths,
     quarantine_dir,
-    replace_together,
     staged,
     text_dir,
     utc_now,
     write_atomic,
     write_json,
+    write_pending,
 )
 from eeg_bewegungsdaten.progress import Progress
 from eeg_bewegungsdaten.quality import NUMBER_COLUMNS, check
@@ -252,13 +252,18 @@ def ingest(
             "tool_version": __version__,
         }
         write_json(staged(outputs.report), report)
+        write_pending(data_dir, outputs.pending, replaced)
     except BaseException:
+        # Nothing is renamed yet. The list goes first: staged files without it are never put in
+        # place, while staged files missing from it would be taken as renamed.
+        outputs.pending.unlink(missing_ok=True)
         for path in replaced:
             staged(path).unlink(missing_ok=True)
         raise
     finally:
         shutil.rmtree(work, ignore_errors=True)
-    replace_together(data_dir, outputs.pending, replaced)
+    # Only the renames happen outside the block: the staged files must stay for the list.
+    finish_replacing(data_dir, outputs.pending)
     return report
 
 

@@ -575,6 +575,71 @@ def test_a_failure_while_writing_keeps_the_old_files(
     assert leftovers(data_dir) == []
 
 
+@pytest.mark.parametrize(
+    ("call", "name", "error", "refused"),
+    [
+        pytest.param("replace", "clean.new", KeyboardInterrupt, False, id="building"),
+        pytest.param("replace", "pending", OSError, False, id="writing the list"),
+        # The list is in place, but `write_atomic` fails to clean up after it.
+        pytest.param("unlink", "pending.tmp", OSError, False, id="after writing the list"),
+        pytest.param("replace", "text", OSError, True, id="renaming text"),
+        pytest.param("replace", "clean", OSError, True, id="renaming clean"),
+        pytest.param("replace", "quarantine", OSError, True, id="renaming quarantine"),
+        pytest.param("replace", "report", OSError, True, id="renaming the report"),
+        pytest.param("unlink", "pending", OSError, True, id="deleting the list"),
+    ],
+)
+def test_a_stopped_ingest_keeps_the_old_version_or_is_refused_until_the_next_one(
+    data_dir: Path, call: str, name: str, error: type[BaseException], refused: bool
+) -> None:
+    ingest(archive(data_dir, {"data.csv": csv(HEADER, row(energy="10"))}), data_dir)
+    new = archive(data_dir, {"data.csv": csv(HEADER, row(energy="20"))}, file_id=NEWER_ID)
+    before = outputs_of(data_dir, 2025, "amprion")
+    outputs = output_paths(data_dir, 2025, "amprion")
+    stop = {
+        "clean.new": staged(outputs.clean),
+        "pending": outputs.pending,
+        "pending.tmp": outputs.pending.with_name(outputs.pending.name + ".tmp"),
+        "text": outputs.text,
+        "clean": outputs.clean,
+        "quarantine": outputs.quarantine,
+        "report": outputs.report,
+    }[name]
+    replace, unlink = Path.replace, Path.unlink
+
+    def stop_replace(self: Path, target: Path) -> Path:
+        if call == "replace" and target == stop:
+            raise error("simulated stop")
+        return replace(self, target)
+
+    def stop_unlink(self: Path, missing_ok: bool = False) -> None:
+        if call == "unlink" and self == stop:
+            raise error("simulated stop")
+        unlink(self, missing_ok=missing_ok)
+
+    with pytest.MonkeyPatch.context() as patched:
+        patched.setattr(Path, "replace", stop_replace)
+        patched.setattr(Path, "unlink", stop_unlink)
+        with pytest.raises(error, match="simulated stop"):
+            ingest(new, data_dir)
+
+    assert outputs.pending.exists() == refused
+    if refused:
+        for layer in ("text", "clean", "quarantine"):
+            with pytest.raises(UnfinishedIngestError):
+                scan(data_dir, layer=layer)
+    else:
+        assert outputs_of(data_dir, 2025, "amprion") == before
+        assert leftovers(data_dir) == []
+
+    ingest(new, data_dir)
+    assert pl.read_parquet(outputs.text)["strommenge"].to_list() == ["20"]
+    assert scan(data_dir).collect()["strommenge"].to_list() == [20]
+    report = json.loads(outputs.report.read_text(encoding="utf-8"))
+    assert [source["file_id"] for source in report["sources"]] == [NEWER_ID]
+    assert leftovers(data_dir) == []
+
+
 def test_a_run_stopped_while_replacing_is_refused_until_ingest_finishes_it(
     data_dir: Path,
     tmp_path: Path,
