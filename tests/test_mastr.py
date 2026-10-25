@@ -8,7 +8,8 @@ from unittest.mock import ANY
 import polars as pl
 import pytest
 
-from eeg_bewegungsdaten import cli
+from eeg_bewegungsdaten import cli, mastr
+from eeg_bewegungsdaten.download import sha256_of
 from eeg_bewegungsdaten.ingest import ingest
 from eeg_bewegungsdaten.mastr import (
     MASTR_SCHEMA,
@@ -414,7 +415,20 @@ def years_dir(tmp_path: Path) -> Path:
 def test_load_bridge_takes_the_keys_of_rows_matched_by_number(years_dir: Path, db: Path) -> None:
     bridge = load_bridge(years_dir, load_register(db))
 
-    assert bridge.source == {"years": [2024, 2025], "keys": 3, "keys_with_several_plants": 1}
+    assert bridge.source == {
+        "years": [2024, 2025],
+        "keys": 3,
+        "keys_with_several_plants": 1,
+        # 2019 adds no key, but it is read all the same.
+        "clean_files": [
+            {
+                "jahr": jahr,
+                "uenb": uenb,
+                "sha256": sha256_of(output_paths(years_dir, jahr, uenb).clean),
+            }
+            for jahr, uenb in [(2019, "transnetbw"), (2024, "tennet"), (2025, "amprion")]
+        ],
+    }
     assert bridge.keys.sort("anlagenschluessel").rows() == [
         (KEY_SHARED, 1, "EEG900000000008", "wind"),
         (KEY_B, 1, "EEG900000000004", "solar"),
@@ -678,3 +692,130 @@ def test_check_match_rejects_a_changed_clean_file(data_dir: Path, db: Path) -> N
 
     with pytest.raises(MastrError, match="was made from another version of the clean file"):
         check_match(data_dir, 2025, "amprion")
+
+
+@pytest.fixture
+def bridge_db(tmp_path: Path) -> Path:
+    """Two EEG plants without Anlagenschluessel: rows without a number match only by the bridge."""
+    return make_mastr_db(
+        tmp_path / "bridge.db",
+        {"AnlagenEegSolar": plants(("EEG900000000001", None), ("EEG900000000002", None))},
+    )
+
+
+def match_all(data_dir: Path, db: Path) -> None:
+    """Build the bridge and match every clean file with it, as `mastr` does."""
+    register = load_register(db)
+    bridge = load_bridge(data_dir, register)
+    for jahr, uenb in clean_files(data_dir):
+        link_file(data_dir, jahr, uenb, register, bridge)
+
+
+def matched(data_dir: Path, jahr: int) -> tuple[str, str | None]:
+    """`treffer` and `eeg_mastr_nr_abgeglichen` of the single row of Amprion in `jahr`."""
+    linked = pl.read_parquet(output_paths(data_dir, jahr, "amprion").mastr)
+    return linked.select("treffer", "eeg_mastr_nr_abgeglichen").row(0)
+
+
+@pytest.fixture
+def bridged_dir(tmp_path: Path, bridge_db: Path) -> Path:
+    """2019 without a MaStR number, matched by the bridge from the same key in 2025."""
+    data_dir = tmp_path / "data"
+    for year, number in [(2019, ""), (2025, "EEG900000000001")]:
+        ingest(archive(data_dir, {"a.csv": csv(HEADER, row(number))}, year=year), data_dir)
+    match_all(data_dir, bridge_db)
+    assert matched(data_dir, 2019) == ("ANLAGENSCHLUESSEL_BRIDGE", "EEG900000000001")
+    return data_dir
+
+
+STALE_BRIDGE = (
+    "the bridge of the match does not fit the current clean files; run 'mastr' for all years again"
+)
+
+
+def test_check_match_rejects_a_bridge_match_after_another_clean_file_changed(
+    bridged_dir: Path, bridge_db: Path
+) -> None:
+    path = output_paths(bridged_dir, 2025, "amprion").clean
+    rows = pl.read_parquet(path).with_columns(eeg_mastr_nr=pl.lit("EEG900000000002"))
+    rows.write_parquet(path)
+
+    # The clean file of 2019 is unchanged, but its match is stale.
+    with pytest.raises(MastrError, match=STALE_BRIDGE):
+        check_match(bridged_dir, 2019, "amprion")
+    match_all(bridged_dir, bridge_db)
+    assert matched(bridged_dir, 2019) == ("ANLAGENSCHLUESSEL_BRIDGE", "EEG900000000002")
+    check_match(bridged_dir, 2019, "amprion")
+
+
+def test_check_match_rejects_a_bridge_match_after_a_clean_file_was_added(
+    bridged_dir: Path, bridge_db: Path
+) -> None:
+    # Another TSO and year name another plant for the same Anlagenschluessel.
+    members = {"a.csv": csv(HEADER, row("EEG900000000002", uenb="tennet"))}
+    ingest(archive(bridged_dir, members, "tennet", 2024), bridged_dir)
+
+    with pytest.raises(MastrError, match=STALE_BRIDGE):
+        check_match(bridged_dir, 2019, "amprion")
+    match_all(bridged_dir, bridge_db)
+    assert matched(bridged_dir, 2019) == ("NOT_FOUND", None)
+
+
+def test_check_match_rejects_a_bridge_match_after_a_clean_file_was_removed(
+    bridged_dir: Path, bridge_db: Path
+) -> None:
+    output_paths(bridged_dir, 2025, "amprion").clean.unlink()
+
+    with pytest.raises(MastrError, match=STALE_BRIDGE):
+        check_match(bridged_dir, 2019, "amprion")
+    match_all(bridged_dir, bridge_db)
+    assert matched(bridged_dir, 2019) == ("NOT_FOUND", None)
+
+
+def test_check_match_rejects_a_bridge_match_if_a_clean_file_disappears_meanwhile(
+    bridged_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    listed = clean_files(bridged_dir)
+    output_paths(bridged_dir, 2025, "amprion").clean.unlink()
+    # As if the file was removed after `clean_files` listed it.
+    monkeypatch.setattr(mastr, "clean_files", lambda data_dir: listed)
+
+    with pytest.raises(MastrError, match=STALE_BRIDGE):
+        check_match(bridged_dir, 2019, "amprion")
+
+
+def test_check_match_rejects_a_bridge_match_of_an_older_version(bridged_dir: Path) -> None:
+    path = output_paths(bridged_dir, 2019, "amprion").mastr_report
+    report = json.loads(path.read_text(encoding="utf-8"))
+    del report["bridge"]["clean_files"]
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(MastrError, match=STALE_BRIDGE):
+        check_match(bridged_dir, 2019, "amprion")
+
+
+def test_check_match_accepts_unchanged_clean_files_and_hashes_each_once(
+    bridged_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hashed: list[Path] = []
+
+    def counted(path: Path) -> str:
+        hashed.append(path)
+        return sha256_of(path)
+
+    monkeypatch.setattr(mastr, "sha256_of", counted)
+    hashes: dict[Path, str] = {}
+    for jahr in (2019, 2025):
+        paths = output_paths(bridged_dir, jahr, "amprion")
+        assert check_match(bridged_dir, jahr, "amprion", hashes=hashes) == paths.mastr
+    assert sorted(hashed) == [output_paths(bridged_dir, j, "amprion").clean for j in (2019, 2025)]
+
+
+def test_check_match_without_the_bridge_ignores_other_clean_files(
+    bridged_dir: Path, bridge_db: Path
+) -> None:
+    link_file(bridged_dir, 2019, "amprion", load_register(bridge_db))
+    output_paths(bridged_dir, 2025, "amprion").clean.unlink()
+
+    paths = output_paths(bridged_dir, 2019, "amprion")
+    assert check_match(bridged_dir, 2019, "amprion") == paths.mastr

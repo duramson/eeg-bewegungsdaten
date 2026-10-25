@@ -449,6 +449,18 @@ def test_export_refuses_a_match_report_without_clean_sha256(data_dir: Path) -> N
     assert not anlage_id_path(data_dir).exists()
 
 
+def test_export_refuses_a_match_whose_bridge_input_changed(data_dir: Path, db: Path) -> None:
+    register = load_register(db)
+    link_file(data_dir, 2024, "amprion", register, load_bridge(data_dir, register))
+    # A clean file of another year, which the bridge of 2024 read.
+    path = output_paths(data_dir, 2025, "transnetbw").clean
+    pl.read_parquet(path).with_columns(eeg_mastr_nr=pl.lit("EEG900000000001")).write_parquet(path)
+
+    with pytest.raises(ExportError, match="bridge of the match does not fit the current clean"):
+        export(data_dir, years=[2024])
+    assert not (data_dir / "export").exists()
+
+
 def test_export_reports_progress_and_each_year(data_dir: Path) -> None:
     calls: list[tuple[int, int | None]] = []
     years: list[int] = []
