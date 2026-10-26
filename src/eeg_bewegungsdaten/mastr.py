@@ -54,6 +54,7 @@ import polars as pl
 from eeg_bewegungsdaten._version import __version__
 from eeg_bewegungsdaten.download import sha256_of
 from eeg_bewegungsdaten.paths import (
+    check_finished,
     clean_dir,
     output_paths,
     utc_now,
@@ -562,6 +563,7 @@ def _sha256(path: Path, hashes: dict[Path, str]) -> str:
 
 def _check_clean(path: Path) -> None:
     try:
+        check_finished(path)
         check_columns(path, CLEAN_SCHEMA, "ingest")
     except OutdatedFileError as e:
         raise MastrError(str(e)) from e

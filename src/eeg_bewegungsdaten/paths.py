@@ -5,9 +5,11 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any, NamedTuple
+
+from eeg_bewegungsdaten.schema import OutdatedFileError
 
 ENV_VAR = "EEG_BEWEGUNGSDATEN_DIR"
 
@@ -21,6 +23,14 @@ class Outputs(NamedTuple):
     report: Path
     mastr: Path
     mastr_report: Path
+    # Lists text, clean, quarantine and report while `ingest` replaces them; see `write_pending`.
+    pending: Path
+
+
+class UnfinishedIngestError(OutdatedFileError):
+    """Output files of a year and TSO that `ingest` began to replace and did not finish: some are
+    new, some old. A kind of `OutdatedFileError`, so that whatever refuses outdated files refuses
+    these too."""
 
 
 def default_data_dir() -> Path:
@@ -79,6 +89,7 @@ def output_paths(data_dir: Path, jahr: int, uenb: str) -> Outputs:
         report=reports_dir(data_dir) / f"{name}.json",
         mastr=mastr_dir(data_dir) / f"{name}.parquet",
         mastr_report=reports_dir(data_dir) / f"{name}.mastr.json",
+        pending=reports_dir(data_dir) / f"{name}.pending.json",
     )
 
 
@@ -100,6 +111,43 @@ def write_text(path: Path, text: str) -> None:
 
 def write_json(path: Path, data: Any) -> None:
     write_text(path, json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+
+
+def staged(path: Path) -> Path:
+    """Where the new version of `path` waits until `finish_replacing` puts it in place."""
+    return path.with_name(path.name + ".new")
+
+
+def write_pending(data_dir: Path, pending: Path, paths: Sequence[Path]) -> None:
+    """Write the list `pending` of `paths`, files in `data_dir` whose `staged` versions are
+    complete. From then on, the readers that call `check_finished` refuse them, until
+    `finish_replacing` has renamed them all; so they never take a mix of old and new files."""
+    write_json(pending, {"replace": [path.relative_to(data_dir).as_posix() for path in paths]})
+
+
+def finish_replacing(data_dir: Path, pending: Path) -> bool:
+    """Do the renames that `pending` lists and that are still to do, then delete it; return
+    whether it existed. A file without a staged version was renamed already. If a rename fails,
+    `pending` stays, and the next call does the rest."""
+    if not pending.is_file():
+        return False
+    for name in json.loads(pending.read_text(encoding="utf-8"))["replace"]:
+        path = data_dir / name
+        if staged(path).exists():
+            staged(path).replace(path)
+    pending.unlink()
+    return True
+
+
+def check_finished(path: Path) -> None:
+    """Raise `UnfinishedIngestError` if `ingest` began to replace the files of the year and TSO
+    of `path` (``clean/<year>/<tso>.parquet`` and the like) and did not finish."""
+    year, tso = path.parent.name, path.stem
+    pending = reports_dir(path.parents[2]) / year / f"{tso}.pending.json"  # as in `output_paths`
+    if pending.exists():
+        raise UnfinishedIngestError(
+            f"{year} {tso}: ingest stopped while it replaced the output files; run 'ingest' again"
+        )
 
 
 def utc_now() -> str:

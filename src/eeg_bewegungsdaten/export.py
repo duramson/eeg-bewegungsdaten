@@ -43,6 +43,7 @@ from eeg_bewegungsdaten.links import PAGE_URL, UENB, UENB_NAMES
 from eeg_bewegungsdaten.mastr import HITS, MASTR_SCHEMA, MastrError, check_match, clean_files
 from eeg_bewegungsdaten.paths import (
     anlage_id_path,
+    check_finished,
     export_dir,
     output_paths,
     utc_now,
@@ -153,6 +154,7 @@ def export(
             if not path.is_file():
                 raise ExportError(f"{path} not found; run '{command}' first")
         try:
+            check_finished(paths.clean)
             check_columns(paths.clean, CLEAN_SCHEMA, "ingest")
             check_match(data_dir, jahr, uenb, hashes=hashes)
             check_columns(paths.mastr, MASTR_SCHEMA, "mastr")
