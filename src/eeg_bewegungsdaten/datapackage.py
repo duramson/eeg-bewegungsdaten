@@ -15,7 +15,7 @@ from typing import Any
 
 import polars as pl
 
-from eeg_bewegungsdaten.columns import describe
+from eeg_bewegungsdaten.columns import describe_export
 from eeg_bewegungsdaten.links import UENB_NAMES
 
 CONTEXT = (
@@ -183,7 +183,7 @@ def _contributor(contributor: Contributor, date: str) -> dict[str, Any]:
 
 def _fields(schema: pl.Schema) -> list[dict[str, Any]]:
     fields = []
-    for column, dtype in describe(schema):
+    for column, dtype in describe_export(schema):
         field: dict[str, Any] = {
             "name": column.name,
             "description": column.description,

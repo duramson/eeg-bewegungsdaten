@@ -11,7 +11,7 @@ English.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import polars as pl
@@ -59,6 +59,17 @@ _AS_PUBLISHED = (
     " In `text`, the field as published: not trimmed, empty fields are '', columns the file "
     "does not have are null."
 )
+# (column, code) -> meaning, for the codes whose meaning points to what the export does not
+# hold: the text layer and `eeg_mastr_nrs_abgeglichen`. The export's metadata use these instead.
+_EXPORT_CODES = {
+    ("hinweise", "EXTRA_VALUE"): (
+        "value in a column without a header name; the export leaves it out"
+    ),
+    ("treffer", "MULTIPLE"): (
+        "several numbers, at least one found; eeg_mastr_nr_abgeglichen is null if they lead to "
+        "several EEG plants"
+    ),
+}
 
 COLUMNS: dict[str, Column] = {
     column.name: column
@@ -211,3 +222,22 @@ def describe(schema: pl.Schema) -> list[tuple[Column, pl.DataType]]:
     """The entry and type of every column of `schema`, in its order. KeyError for a column without
     an entry."""
     return [(COLUMNS[name], dtype) for name, dtype in schema.items()]
+
+
+def describe_export(schema: pl.Schema) -> list[tuple[Column, pl.DataType]]:
+    """`describe` for the export's metadata: without the note on `text` and with the codes of
+    `_EXPORT_CODES`, as the export holds neither `text` nor `eeg_mastr_nrs_abgeglichen`."""
+    return [
+        (
+            replace(
+                column,
+                description=column.description.removesuffix(_AS_PUBLISHED),
+                codes={
+                    code: _EXPORT_CODES.get((column.name, code), text)
+                    for code, text in column.codes.items()
+                },
+            ),
+            dtype,
+        )
+        for column, dtype in describe(schema)
+    ]

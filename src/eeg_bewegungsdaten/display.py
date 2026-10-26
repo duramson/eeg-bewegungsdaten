@@ -934,7 +934,11 @@ class ExportDisplay(RunDisplay):
 
     def final_lines(self) -> list[tuple[str, Text | str]]:
         return [
-            ("Output", f"{self.out_dir}  (one Parquet file per year, sources.txt, sources.json)"),
+            (
+                "Output",
+                f"{self.out_dir}  (one Parquet file per year, README.md, sources.txt, "
+                "sources.json, datapackage.json)",
+            ),
             (
                 "Note",
                 Text("anlage_id.parquet stays in the data folder: never share it", "eeg.warn"),

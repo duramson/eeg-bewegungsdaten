@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from pathlib import Path
 from typing import Any
@@ -11,7 +12,8 @@ import pytest
 from oemetadata.v2.v20.schema import OEMETADATA_V20_SCHEMA
 
 from eeg_bewegungsdaten import cli
-from eeg_bewegungsdaten.columns import COLUMNS
+from eeg_bewegungsdaten.columns import COLUMNS, describe_export
+from eeg_bewegungsdaten.datacard import DATACARD, datacard
 from eeg_bewegungsdaten.datapackage import DATAPACKAGE_JSON
 from eeg_bewegungsdaten.export import (
     ANLAGE_ID_SCHEMA,
@@ -36,6 +38,7 @@ from eeg_bewegungsdaten.paths import anlage_id_path, default_data_dir, output_pa
 from eeg_bewegungsdaten.schema import CLEAN_SCHEMA
 from tests.builders import HEADER, archive, csv, make_mastr_db, plants, row
 
+ROOT = Path(__file__).parents[1]
 KEY_A = "E91000000000000000000000000000001"
 KEY_B = "E91000000000000000000000000000002"
 KEY_C = "E91000000000000000000000000000003"
@@ -89,6 +92,7 @@ def test_export_writes_one_file_per_year_and_the_sources(data_dir: Path) -> None
 
     names = sorted(path.name for path in (data_dir / "export").iterdir())
     assert names == [
+        "README.md",
         "datapackage.json",
         "eeg-bewegungsdaten-2024.parquet",
         "eeg-bewegungsdaten-2025.parquet",
@@ -288,7 +292,8 @@ def test_datapackage_has_one_resource_per_year_with_the_dictionary(data_dir: Pat
         "nullable": True,
         "unit": "kWh",
     }
-    assert fields["strommenge"]["description"] == COLUMNS["strommenge"].description
+    exported = {column.name: column for column, _ in describe_export(EXPORT_SCHEMA)}
+    assert fields["strommenge"]["description"] == exported["strommenge"].description
     assert fields["hinweise"]["type"] == "text[]"
     assert fields["jahr"]["nullable"] is False
     codes = [ref["value"] for ref in fields["treffer"]["valueReference"]]
@@ -322,6 +327,139 @@ def test_cli_export_names_the_contributor(data_dir: Path) -> None:
         (contributor,) = resource["contributors"]
         assert (contributor["title"], contributor["path"]) == ("A. Person", orcid)
         assert contributor["roles"] == ["DataCurator"]
+
+
+def read_datacard(data_dir: Path) -> str:
+    return (data_dir / "export" / DATACARD).read_text(encoding="utf-8")
+
+
+def section(text: str, heading: str) -> str:
+    return text.split(f"\n## {heading}\n")[1].split("\n## ")[0]
+
+
+def test_datacard_is_written_from_sources_json(data_dir: Path) -> None:
+    export(data_dir)
+
+    text = read_datacard(data_dir)
+    content = json.loads((data_dir / "export" / "sources.json").read_text(encoding="utf-8"))
+    assert text == datacard(content, EXPORT_SCHEMA)
+    assert text.startswith("# EEG-Bewegungsdaten 2024 to 2025, cleaned and matched")
+    assert (
+        "- `eeg-bewegungsdaten-2025.parquet`: 2025, 4 rows of 50Hertz Transmission GmbH, Amprion "
+        "GmbH and TransnetBW GmbH; 2 plants (`anlage_id`), 2 rows without one; 75.0 % of the "
+        "rows matched with the MaStR." in text
+    )
+    # The codes to leave out for the grid feed-in, and the years checked
+    assert (
+        "`REPEATED_ENERGY`, `SELF_CONSUMPTION`, `PAID_SELF_CONSUMPTION` or "
+        "`SELF_CONSUMPTION_DEDUCTION`. For 2023 to 2025, the sum of the other rows matches the "
+        "energy of the EEG annual account to 0.02 %; earlier years were not checked" in text
+    )
+    assert "(MaStR), export of 2026-10-17." in text
+    # Markdown tables need pipes, and CKAN does not render them.
+    assert "|" not in text
+    # The card is read outside the repository.
+    assert all(link.startswith("https://") for link in re.findall(r"\]\(([^)]*)\)", text))
+
+
+def test_datacard_names_the_rules_for_personal_data(data_dir: Path) -> None:
+    export(data_dir)
+
+    text = read_datacard(data_dir)
+    assert "- `anlage_id` replaces the plant key" in text
+    assert "a few are sole traders named after their owner" in text
+    assert "`eeg_mastr_nr` holds a code such as `Grund_MASTRNR99` or a note" in text
+    assert "- The export keeps every row, also those of PV plants up to 30 kW" in text
+    assert "- Show plants up to 30 kW only in aggregates, never row by row.\n" in text
+    assert (
+        "- Hide every aggregate with fewer than 10 plants, and every aggregate in which one plant "
+        "makes up almost the whole sum.\n" in text
+    )
+
+
+def test_datacard_names_every_column_with_type_unit_and_meaning(data_dir: Path) -> None:
+    export(data_dir)
+
+    columns = section(read_datacard(data_dir), "Columns")
+    items = {line.split("`")[1]: line for line in columns.splitlines() if line.startswith("- `")}
+    assert list(items) == list(EXPORT_SCHEMA)
+    for column, dtype in describe_export(EXPORT_SCHEMA):
+        unit = f", {column.unit}" if column.unit else ""
+        assert items[column.name] == f"- `{column.name}`: {dtype}{unit}. {column.description}"
+        for code, meaning in column.codes.items():
+            assert f"\n    - `{code}`: {meaning}\n" in columns
+    assert items["jahr"] == "- `jahr`: Int16. Year of the data, from the file name."
+    assert items["strommenge"].startswith("- `strommenge`: Float64, kWh. Energy of the row.")
+    assert items["eeg_zahlung"].startswith("- `eeg_zahlung`: Float64, EUR. ")
+    assert items["hinweise"].startswith("- `hinweise`: List(String). Quality notes")
+    assert "\n    - `MULTIPLE`: several numbers, at least one found;" in columns
+
+
+def test_metadata_name_nothing_the_export_does_not_hold(data_dir: Path) -> None:
+    export(data_dir)
+
+    for name in (DATACARD, DATAPACKAGE_JSON):
+        text = (data_dir / "export" / name).read_text(encoding="utf-8")
+        for absent in ("eeg_mastr_nrs_abgeglichen", "text layer", "In `text`", "rohzeile"):
+            assert absent not in text, (name, absent)
+
+
+def test_datacard_claims_no_license_for_the_eeg_data(data_dir: Path) -> None:
+    content = export(data_dir)
+
+    text = read_datacard(data_dir)
+    eeg, mastr = section(text, "Licenses").strip().splitlines()
+    assert eeg.startswith(
+        "- [EEG-Bewegungsdaten: no settled license]"
+        "(https://github.com/duramson/eeg-bewegungsdaten#data-license)."
+    )
+    assert "Datenlizenz" not in eeg
+    assert mastr.startswith(f"- [{DL_DE_BY}](https://www.govdata.de/dl-de/by-2-0) (DL-DE-BY-2.0)")
+    mastr_columns = "`treffer`, `eeg_mastr_nr_abgeglichen` and `energietraeger`"
+    assert f"for the MaStR data in {mastr_columns}." in mastr
+    assert text.count("DL-DE-BY-2.0") == 1
+    assert not any(name in text for name in ("CC0", "CC-BY", "CC BY", "ODbL", "dl-de/zero"))
+    notes = section(text, "Source notes")
+    assert f"- {content['source_notes']['eeg']}\n" in notes
+    assert f"- {content['source_notes']['mastr']}\n" in notes
+
+
+def github_anchor(heading: str) -> str:
+    """The anchor that GitHub gives a heading."""
+    return re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
+
+
+def test_readme_has_the_sections_the_metadata_link_to() -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    headings = {github_anchor(line.lstrip("#")) for line in readme.splitlines() if line[:1] == "#"}
+    linked = {
+        anchor
+        for module in ("datacard.py", "datapackage.py")
+        for anchor in re.findall(
+            r"\{REPOSITORY\}#([\w-]+)",
+            (ROOT / "src" / "eeg_bewegungsdaten" / module).read_text(encoding="utf-8"),
+        )
+    }
+    assert {"summing-energy", "data-license"} <= linked
+    # `readme` is where GitHub shows the README on the page of the repository.
+    assert sorted(linked - headings - {"readme"}) == []
+
+
+def test_export_replaces_no_readme_it_did_not_write(data_dir: Path, tmp_path: Path) -> None:
+    out = tmp_path / "project"
+    out.mkdir()
+    (out / "README.md").write_text("# My project\n", encoding="utf-8")
+
+    with pytest.raises(ExportError, match=r"README\.md is not the datacard of an export"):
+        export(data_dir, out)
+    assert [path.name for path in out.iterdir()] == ["README.md"]
+    assert (out / "README.md").read_text(encoding="utf-8") == "# My project\n"
+    assert not anlage_id_path(data_dir).exists()
+
+    (out / "README.md").unlink()
+    export(data_dir, out)
+    export(data_dir, out)  # replaces the card it wrote
+    assert (out / "README.md").read_text(encoding="utf-8").startswith("# EEG-Bewegungsdaten")
 
 
 def test_sources_name_every_mastr_export_date(data_dir: Path) -> None:

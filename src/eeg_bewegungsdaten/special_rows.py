@@ -33,14 +33,14 @@ SPECIAL_ROWS: dict[str, tuple[str, str]] = {
 
 # Energy that was not fed into the grid, or that other rows hold already. The paid
 # self-consumption and its deduction cancel out; both are left out, as neither was fed in.
-_NOT_FED_IN = (
+NOT_FED_IN = (
     "REPEATED_ENERGY",
     "SELF_CONSUMPTION",
     "PAID_SELF_CONSUMPTION",
     "SELF_CONSUMPTION_DEDUCTION",
 )
 # Energy that other rows hold already, or that takes back energy of other rows.
-_NOT_GENERATED = ("REPEATED_ENERGY", "SELF_CONSUMPTION_DEDUCTION")
+NOT_GENERATED = ("REPEATED_ENERGY", "SELF_CONSUMPTION_DEDUCTION")
 
 
 def special_row(category: pl.Expr) -> pl.Expr:
@@ -54,12 +54,12 @@ def special_row(category: pl.Expr) -> pl.Expr:
 
 
 def grid_feed_in() -> pl.Expr:
-    """True for the rows whose `strommenge` is energy fed into the grid. Their sum matches the
-    energy of the EEG annual account."""
-    return ~pl.col("sonderzeile").is_in(_NOT_FED_IN).fill_null(False)
+    """True for the rows whose `strommenge` is energy fed into the grid. For 2023 to 2025, their
+    sum matches the energy of the EEG annual account."""
+    return ~pl.col("sonderzeile").is_in(NOT_FED_IN).fill_null(False)
 
 
 def generation() -> pl.Expr:
     """True for the rows whose `strommenge` is energy the plant generated: grid feed-in plus
     self-consumption, as the AGEE-Stat counts it."""
-    return ~pl.col("sonderzeile").is_in(_NOT_GENERATED).fill_null(False)
+    return ~pl.col("sonderzeile").is_in(NOT_GENERATED).fill_null(False)

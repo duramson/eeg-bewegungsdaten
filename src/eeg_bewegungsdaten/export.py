@@ -8,6 +8,8 @@ Outputs, by default in ``export/``:
   ``treffer``, ``eeg_mastr_nr_abgeglichen`` and ``energietraeger`` from ``mastr``
 - ``sources.txt`` and ``sources.json``: source notes for the EEG data and the MaStR, and the
   source files with their SHA-256
+- ``README.md`` and ``datapackage.json``: the datacard and the metadata (OEMetadata v2), from
+  the content of ``sources.json`` and the column dictionary
 
 ``anlage_id`` is drawn at random for every TSO and Anlagenschluessel, so it cannot be computed
 from the key. The mapping stays in ``anlage_id.parquet`` in the data folder, so that a key keeps
@@ -35,6 +37,7 @@ from typing import Any
 import polars as pl
 
 from eeg_bewegungsdaten._version import __version__
+from eeg_bewegungsdaten.datacard import DATACARD, datacard, enumerate_words, is_datacard
 from eeg_bewegungsdaten.datapackage import DATAPACKAGE_JSON, Contributor, datapackage
 from eeg_bewegungsdaten.links import PAGE_URL, UENB, UENB_NAMES
 from eeg_bewegungsdaten.mastr import HITS, MASTR_SCHEMA, MastrError, check_match, clean_files
@@ -110,7 +113,8 @@ MASTR_NOTE = (
 
 class ExportError(RuntimeError):
     """Clean or mastr files are missing or do not fit together, the output folder holds other
-    years or the id mapping, or the id mapping has other columns."""
+    years, the id mapping or a README.md that is not a datacard, or the id mapping has other
+    columns."""
 
 
 def export(
@@ -164,6 +168,11 @@ def export(
             f"{out_dir} holds the export of other years ({', '.join(others)}); "
             "remove them or choose another folder"
         )
+    card = out_dir / DATACARD
+    if card.exists() and not is_datacard(card):
+        raise ExportError(
+            f"{card} is not the datacard of an export; remove it or choose another folder"
+        )
     for jahr, uenbs in by_year.items():
         missing = [uenb for uenb in UENB if uenb not in uenbs]
         if missing:
@@ -209,6 +218,7 @@ def export(
     }
     write_json(out_dir / SOURCES_JSON, content)
     write_json(out_dir / DATAPACKAGE_JSON, datapackage(content, EXPORT_SCHEMA, contributor))
+    write_text(out_dir / DATACARD, datacard(content, EXPORT_SCHEMA))
     write_text(out_dir / SOURCES_TXT, _sources_text(content))
     return content
 
@@ -329,10 +339,10 @@ def _sources(data_dir: Path, files: Sequence[tuple[int, str]]) -> dict[str, Any]
     uenbs = [UENB_NAMES[uenb] for uenb in UENB if any(u == uenb for _, u in files)]
     return {
         "source_notes": {
-            "eeg": EEG_NOTE.format(uenb=_enumerate(uenbs), url=PAGE_URL),
+            "eeg": EEG_NOTE.format(uenb=enumerate_words(uenbs, "und"), url=PAGE_URL),
             "mastr": MASTR_NOTE.format(
                 export="Gesamtdatenexporte" if len(german) > 1 else "Gesamtdatenexport",
-                dates=_enumerate(german or ["TT.MM.JJJJ"]),
+                dates=enumerate_words(german or ["TT.MM.JJJJ"], "und"),
             ),
         },
         "mastr_export_dates": export_dates,
@@ -360,11 +370,6 @@ def _sources_text(content: dict[str, Any]) -> str:
         ),
     ]
     return "\n".join(lines) + "\n"
-
-
-def _enumerate(items: Sequence[str]) -> str:
-    """['a', 'b', 'c'] -> 'a, b und c'."""
-    return items[0] if len(items) == 1 else f"{', '.join(items[:-1])} und {items[-1]}"
 
 
 def _iso_date(value: str) -> str:
