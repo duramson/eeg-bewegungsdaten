@@ -713,7 +713,7 @@ def _download_parallel(
 
         return moved
 
-    def work(queue: deque[DownloadLink], url: str) -> None:
+    def work(queue: deque[DownloadLink], url: str, ended: threading.Event) -> None:
         try:
             while True:
                 limits.acquire(url)
@@ -738,23 +738,28 @@ def _download_parallel(
             if not limits.stopped:  # an error of its own, not the end of the run
                 errors.append(e)
                 limits.stop()
+        finally:
+            ended.set()
 
-    threads = [
-        threading.Thread(
-            target=work,
-            args=(queue, queue[0].url),
-            name=f"download {_hostname(queue[0].url)}",
-            daemon=True,  # so that the run can end without those that do not stop in time
-        )
-        for queue in queues
-        for _ in range(min(limits.cap(queue[0].url), len(queue)))
-    ]
+    # Each thread with the event it sets when it ends. Not `Thread.join` or `is_alive`: before
+    # Python 3.13, Ctrl+C during a join can mark a thread as ended that still runs.
+    threads: dict[threading.Thread, threading.Event] = {}
+    for queue in queues:
+        for _ in range(min(limits.cap(queue[0].url), len(queue))):
+            ended = threading.Event()
+            thread = threading.Thread(
+                target=work,
+                args=(queue, queue[0].url, ended),
+                name=f"download {_hostname(queue[0].url)}",
+                daemon=True,  # so that the run can end without those that do not stop in time
+            )
+            threads[thread] = ended
     try:
         for thread in threads:
             thread.start()
-        for thread in threads:
-            while thread.is_alive() and not limits.stopped:
-                thread.join(0.1)  # with a timeout, so that Ctrl+C gets through on Windows too
+        for ended in threads.values():
+            while not ended.is_set() and not limits.stopped:
+                ended.wait(0.1)  # with a timeout, so that Ctrl+C gets through on Windows too
     finally:
         _stop(threads, running, limits, data_dir)
     if errors:
@@ -762,7 +767,7 @@ def _download_parallel(
 
 
 def _stop(
-    threads: list[threading.Thread],
+    threads: dict[threading.Thread, threading.Event],
     running: dict[threading.Thread, DownloadLink],
     limits: HostLimits,
     data_dir: Path,
@@ -775,11 +780,11 @@ def _stop(
         n = len(running)
         log.info("Stopping %d running download%s", n, "" if n == 1 else "s")
     deadline = time.monotonic() + STOP_WAIT
-    for thread in threads:
-        if thread.is_alive():
-            thread.join(max(deadline - time.monotonic(), 0.0))
+    for thread, ended in threads.items():
+        if thread.ident is not None:  # started
+            ended.wait(max(deadline - time.monotonic(), 0.0))
     for thread, link in list(running.items()):
-        if not thread.is_alive():
+        if threads[thread].is_set():
             continue
         log.warning("%s did not stop within %.0f s", link.url, STOP_WAIT)
         part = _part_path(archive_path(data_dir, link))
