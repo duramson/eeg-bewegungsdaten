@@ -1,8 +1,8 @@
 """Terminal output of the command line interface, on stderr.
 
 Commands that work through a list of files (`download`, `ingest`) share one display. On a
-terminal it keeps a live area at the bottom: the running item with its bar, the next items in the
-queue, a rule and a summary that updates while the run goes on. Each finished item prints a line
+terminal it keeps a live area at the bottom: the running items with their bars, the next items in
+the queue, a rule and a summary that updates while the run goes on. Each finished item prints a line
 above it. Elsewhere (a pipe, CI, a log file) only these lines and the final summary are printed,
 with ASCII symbols if the output cannot encode Unicode. All colors come from `THEME`.
 """
@@ -33,7 +33,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 
-from eeg_bewegungsdaten.download import ArchivedFile
+from eeg_bewegungsdaten.download import ArchivedFile, HostLimits
 from eeg_bewegungsdaten.links import DownloadLink
 from eeg_bewegungsdaten.mastr import HITS
 from eeg_bewegungsdaten.progress import Progress
@@ -124,7 +124,10 @@ def _rate(size: float, seconds: float) -> str:
 
 
 def _source(url: str) -> str:
-    host = urlsplit(url).hostname or ""
+    return _host_name(urlsplit(url).hostname or "")
+
+
+def _host_name(host: str) -> str:
     return "Wayback Machine" if host == "web.archive.org" else host.removeprefix("www.")
 
 
@@ -504,12 +507,14 @@ class DownloadDisplay(RunDisplay):
         archived: set[str],
         data_dir: Path,
         *,
+        limits: HostLimits | None = None,
         verbose: bool = False,
     ) -> None:
         super().__init__(output, [_link_item(link, archived) for link in links], verbose=verbose)
         self.links = {link.url: link for link in links}
         self.archived = archived
         self.data_dir = data_dir
+        self.limits = limits
 
     def header(self) -> Text:
         header = Text.assemble(
@@ -568,7 +573,15 @@ class DownloadDisplay(RunDisplay):
         )
         if wayback:
             data += f"{s}{wayback} from the Wayback Machine"
-        return [("Data", data)]
+        lines: list[tuple[str, Text | str]] = [("Data", data)]
+        if self.limits is not None and self.limits.state():
+            adapts = self.limits.jobs is None
+            hosts = [
+                f"{_host_name(host)} {limit} at a time" + (f" (up to {cap})" if adapts else "")
+                for host, limit, cap in self.limits.state()
+            ]
+            lines.append(("Hosts", s.join(hosts)))
+        return lines
 
     def final_lines(self) -> list[tuple[str, Text | str]]:
         lines: list[tuple[str, Text | str]] = [("Archive", str(self.data_dir / "raw"))]

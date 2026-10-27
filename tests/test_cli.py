@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import errno
+import functools
 import io
 from collections.abc import Callable
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 from rich.console import Console
 
 from eeg_bewegungsdaten import cli, display
+from eeg_bewegungsdaten.download import HostLimits
 from eeg_bewegungsdaten.links import (
     PAGE_URL,
     DownloadLink,
@@ -61,8 +63,9 @@ def serve_page(
 
     monkeypatch.setattr(cli, "new_client", new_client)
     monkeypatch.setattr("eeg_bewegungsdaten.links.new_client", new_client)
-    # Retries of the failing files do not wait
+    # Retries of the failing files do not wait, with --jobs 1 or without
     monkeypatch.setattr("eeg_bewegungsdaten.download.time.sleep", lambda seconds: None)
+    monkeypatch.setattr(cli, "HostLimits", functools.partial(HostLimits, sleep=lambda s: None))
     return seen
 
 
@@ -127,11 +130,7 @@ def test_download_filters_by_tso_and_keeps_the_legend(
     assert cli.main(["--data-dir", str(tmp_path), "download", "--uenb", "amprion"]) == 0
 
     downloaded = [url for url in requests if url != PAGE_URL]
-    older = [link.url for link in OLDER if link.uenb in ("amprion", None)]
-    assert len(downloaded) == 2 + len(older)
-    assert "amprion" in downloaded[0]
-    assert downloaded[1].endswith("bewegungsdaten_legende.xlsx")
-    assert downloaded[2:] == older
+    assert sorted(downloaded) == sorted(amprion_and_legends())
     lines = capsys.readouterr().err.splitlines()
     assert lines[0] == f"Downloading {len(downloaded)} files to {tmp_path}"
     # One line per file, an empty line, the summary
@@ -142,7 +141,45 @@ def test_download_filters_by_tso_and_keeps_the_legend(
     assert summary(lines, "Files") == (
         f"{len(downloaded)}/{len(downloaded)} done · {len(downloaded)} downloaded · 0 failed"
     )
+    # Each downloaded file allowed one more at a time, up to the cap
+    assert summary(lines, "Hosts") == (
+        "netztransparenz.de 6 at a time (up to 6) · Wayback Machine 3 at a time (up to 3)"
+    )
     assert summary(lines, "Archive") == str(tmp_path / "raw")
+
+
+def amprion_and_legends() -> list[str]:
+    """The URLs of the files of Amprion and of the legends, in the order of the links."""
+    page = [link.url for link in parse_links(PAGE) if link.uenb in ("amprion", None)]
+    return page + [link.url for link in OLDER if link.uenb in ("amprion", None)]
+
+
+@pytest.mark.parametrize("jobs", ["1", "2"])
+def test_download_with_fixed_jobs(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], jobs: str
+) -> None:
+    requests = serve_page(monkeypatch)
+    args = ["--data-dir", str(tmp_path), "download", "--uenb", "amprion", "--jobs", jobs]
+    assert cli.main(args) == 0
+
+    downloaded = [url for url in requests if url != PAGE_URL]
+    lines = capsys.readouterr().err.splitlines()
+    if jobs == "1":
+        # One file after the other, in the order of the links, as before --jobs
+        assert downloaded == amprion_and_legends()
+        assert not [line for line in lines if line.startswith("Hosts ")]
+    else:
+        assert sorted(downloaded) == sorted(amprion_and_legends())
+        assert (
+            summary(lines, "Hosts")
+            == "netztransparenz.de 2 at a time · Wayback Machine 2 at a time"
+        )
+
+
+@pytest.mark.parametrize("jobs", ["0", "-1", "x"])
+def test_download_refuses_fewer_than_one_job(jobs: str) -> None:
+    with pytest.raises(SystemExit):
+        cli.main(["download", "--jobs", jobs])
 
 
 def summary(lines: list[str], name: str) -> str:
@@ -217,20 +254,32 @@ def test_download_goes_on_after_an_os_error(
     assert not list((tmp_path / "raw" / "2018" / "amprion").rglob("*.*"))
 
 
+@pytest.mark.parametrize(
+    ("jobs", "started"),
+    # Two files at a time per host at first: those already running end, and fail as well
+    [([], 4), (["--jobs", "1"], 1)],
+    ids=["adaptive", "one-job"],
+)
 def test_download_stops_when_the_disk_is_full(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
     caplog: pytest.LogCaptureFixture,
+    jobs: list[str],
+    started: int,
 ) -> None:
     requests = serve_page(monkeypatch)
     refuse_rename(monkeypatch, OSError(errno.ENOSPC, "No space left on device"), "")
 
-    assert cli.main(["--data-dir", str(tmp_path), "download", "--year", "2018"]) == 1
+    assert cli.main(["--data-dir", str(tmp_path), "download", "--year", "2018", *jobs]) == 1
 
-    assert len([url for url in requests if url != PAGE_URL]) == 1
-    # The line of the file, and again in the summary
-    assert capsys.readouterr().err.count("No space left on device") == 2
+    assert len([url for url in requests if url != PAGE_URL]) == started
+    # The line of each file, and again in the summary
+    lines = capsys.readouterr().err.splitlines()
+    assert "\n".join(lines).count("No space left on device") == 2 * started
+    assert summary(lines, "Files") == (
+        f"{started}/7 done · {7 - started} waiting · 0 downloaded · {started} failed"
+    )
     assert caplog.messages.count("The disk is full; the other files are not downloaded") == 1
 
 
@@ -304,15 +353,16 @@ def test_download_on_a_terminal_shows_the_same_lines(
     assert f"{files}/{files} done" in text
 
 
+@pytest.mark.parametrize("jobs", [[], ["--jobs", "1"]], ids=["adaptive", "one-job"])
 def test_interrupted_download_ends_without_traceback(
-    requests: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    requests: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, jobs: list[str]
 ) -> None:
     def interrupt(*args: object, **kwargs: object) -> None:
         raise KeyboardInterrupt
 
-    monkeypatch.setattr(cli, "download", interrupt)
+    monkeypatch.setattr("eeg_bewegungsdaten.download.download", interrupt)
 
-    assert cli.main(["--data-dir", str(tmp_path), "download"]) == 130
+    assert cli.main(["--data-dir", str(tmp_path), "download", *jobs]) == 130
 
 
 def test_download_unknown_year_fails(requests: list[str], tmp_path: Path) -> None:

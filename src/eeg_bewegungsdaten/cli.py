@@ -21,10 +21,10 @@ from eeg_bewegungsdaten.download import (
     ArchivedFile,
     ChecksumError,
     DownloadError,
-    archive_path,
+    HostLimits,
     archived_files,
-    download,
-    read_meta,
+    download_all,
+    is_archived,
     verify,
 )
 from eeg_bewegungsdaten.export import ExportError, export
@@ -40,6 +40,7 @@ from eeg_bewegungsdaten.mastr import (
     load_register,
 )
 from eeg_bewegungsdaten.paths import ENV_VAR, default_data_dir, export_dir, output_paths
+from eeg_bewegungsdaten.progress import Progress
 from eeg_bewegungsdaten.reader import data_size
 from eeg_bewegungsdaten.schema import FormatError
 
@@ -86,6 +87,14 @@ def _parser() -> argparse.ArgumentParser:
 
     fetch = commands.add_parser("download", help="download data files and legend into the archive")
     _add_filters(fetch)
+    fetch.add_argument(
+        "--jobs",
+        type=_jobs,
+        metavar="N",
+        help="download N files at a time from each host, at most 6 (3 from the Wayback "
+        "Machine); 1 downloads one file after the other (default: start with 2 per host and "
+        "adapt to the servers)",
+    )
     fetch.set_defaults(func=_download)
 
     build = commands.add_parser(
@@ -137,6 +146,12 @@ def _add_filters(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--uenb", choices=UENB, action="append", help="only this TSO (repeatable)")
 
 
+def _jobs(value: str) -> int:
+    if not value.isdigit() or int(value) < 1:
+        raise argparse.ArgumentTypeError(f"must be a whole number from 1 on, not {value!r}")
+    return int(value)
+
+
 def _data_dir(args: argparse.Namespace) -> Path:
     data_dir: Path = args.data_dir.expanduser() if args.data_dir else default_data_dir()
     return data_dir
@@ -183,29 +198,35 @@ def _download(args: argparse.Namespace) -> int:
         if not any(link.kind == "bewegungsdaten" for link in links):
             log.error("No known data files match --year/--uenb")
             return 1
-        archived = {link.url for link in links if _is_archived(data_dir, link)}
+        archived = {link.url for link in links if is_archived(data_dir, link)}
+        limits = None if args.jobs == 1 else HostLimits(args.jobs)
         with display.DownloadDisplay(
-            args.console, links, archived, data_dir, verbose=args.verbose
+            args.console, links, archived, data_dir, limits=limits, verbose=args.verbose
         ) as shown:
-            for link in links:
+            disk_full = False
+
+            def start(link: DownloadLink) -> Progress:
                 log.debug("%s %s: %s", link.year or "-", link.uenb or link.kind, link.url)
-                try:
-                    result = download(link, data_dir, client, progress=shown.start(link.url))
-                except (httpx.HTTPError, DownloadError, OSError) as e:
-                    shown.failed(link, e)
-                    if isinstance(e, OSError) and e.errno in _DISK_FULL:
-                        log.error("The disk is full; the other files are not downloaded")
-                        break
-                else:
+                return shown.start(link.url)
+
+            def done(link: DownloadLink, result: ArchivedFile | Exception) -> bool:
+                nonlocal disk_full
+                if isinstance(result, ArchivedFile):
                     shown.finished(link, result)
+                    return True
+                if not isinstance(result, (httpx.HTTPError, DownloadError, OSError)):
+                    raise result
+                shown.failed(link, result)
+                if isinstance(result, OSError) and result.errno in _DISK_FULL:
+                    # Files that were running already end, and may fail the same way.
+                    if not disk_full:
+                        log.error("The disk is full; the other files are not downloaded")
+                    disk_full = True
+                    return False
+                return True
+
+            download_all(links, data_dir, client, limits, start=start, done=done)
     return 1 if shown.failures or shown.changed or not page_read else 0
-
-
-def _is_archived(data_dir: Path, link: DownloadLink) -> bool:
-    try:
-        return read_meta(archive_path(data_dir, link)) is not None
-    except DownloadError:
-        return False
 
 
 def _ingest(args: argparse.Namespace) -> int:

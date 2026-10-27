@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import _thread
 import dataclasses
 import hashlib
 import json
 import logging
+import threading
+from collections import Counter
 from collections.abc import Callable, Iterator
 from pathlib import Path
 
@@ -12,12 +15,16 @@ import pytest
 
 from eeg_bewegungsdaten.download import (
     ATTEMPTS,
+    MAX_WAIT,
     RETRY_STATUS,
+    ArchivedFile,
     ChecksumError,
     DownloadError,
+    HostLimits,
     archive_path,
     archived_files,
     download,
+    download_all,
     meta_path,
     read_meta,
     verify,
@@ -802,3 +809,300 @@ def test_finished_download_reports_no_progress(tmp_path: Path, link: DownloadLin
         download(link, tmp_path, client, progress=lambda d, t: calls.append((d, t)))
 
     assert calls == []
+
+
+# Several files at a time
+
+SERVER = "www.netztransparenz.de"
+WAYBACK = "web.archive.org"
+
+
+def server_link(n: int) -> DownloadLink:
+    """A file on netztransparenz.de with a CDN id of its own."""
+    return classified(URL.replace("0687a707", f"{n:08d}"))
+
+
+def wayback_link(n: int) -> DownloadLink:
+    return classified(
+        f"https://web.archive.org/web/201907191{n:05d}id_/https://www.netztransparenz.de/"
+        f"portals/1/Amprion_Bewegungsdaten_{2016 + n}.zip"
+    )
+
+
+class Clock:
+    """Time that passes only while someone sleeps; records the pauses."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.pauses: list[float] = []
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.pauses.append(seconds)
+        self.now += seconds
+
+
+@pytest.fixture
+def clock() -> Clock:
+    return Clock()
+
+
+def limits_with(clock: Clock, jobs: int | None = None) -> HostLimits:
+    return HostLimits(jobs, clock=clock, sleep=clock.sleep)
+
+
+def limit(limits: HostLimits, host: str) -> int:
+    return next(limit for name, limit, _ in limits.state() if name == host)
+
+
+def status_error(status: int, headers: dict[str, str] | None = None) -> httpx.HTTPStatusError:
+    request = httpx.Request("GET", URL)
+    response = httpx.Response(status, headers=headers, request=request)
+    return httpx.HTTPStatusError(f"HTTP {status}", request=request, response=response)
+
+
+Ended = list[tuple[DownloadLink, ArchivedFile | Exception]]
+
+
+def collect(ended: Ended) -> Callable[[DownloadLink, ArchivedFile | Exception], bool]:
+    def done(link: DownloadLink, result: ArchivedFile | Exception) -> bool:
+        ended.append((link, result))
+        return True
+
+    return done
+
+
+def test_limit_grows_after_each_downloaded_file_up_to_the_cap(clock: Clock) -> None:
+    limits = limits_with(clock)
+    grown = {}
+    for url, host in ((URL, SERVER), (WAYBACK_2022, WAYBACK)):
+        limits.acquire(url)
+        limits.release(url, grow=False)  # a failed file
+        seen = [limit(limits, host)]
+        for _ in range(5):
+            limits.acquire(url)
+            limits.release(url, grow=True)
+            seen.append(limit(limits, host))
+        grown[host] = seen
+
+    assert grown == {SERVER: [2, 3, 4, 5, 6, 6], WAYBACK: [2, 3, 3, 3, 3, 3]}
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        status_error(429),
+        status_error(503),
+        httpx.ReadTimeout("timed out"),
+        httpx.ConnectTimeout("timed out"),
+    ],
+    ids=["429", "503", "read-timeout", "connect-timeout"],
+)
+def test_busy_host_halves_its_limit(clock: Clock, error: httpx.HTTPError) -> None:
+    limits = limits_with(clock)
+    for url in (URL, URL, URL, URL, WAYBACK_2022):
+        limits.acquire(url)
+        limits.release(url, grow=url == URL)
+    halved = []
+    for _ in range(3):
+        limits.slow_down(URL, error)
+        halved.append(limit(limits, SERVER))
+
+    assert halved == [3, 1, 1]
+    assert limit(limits, WAYBACK) == 2
+
+
+@pytest.mark.parametrize(
+    "error",
+    [status_error(500), status_error(404), httpx.ReadError("connection reset")],
+    ids=["500", "404", "read-error"],
+)
+def test_other_errors_keep_the_limit(clock: Clock, error: httpx.HTTPError) -> None:
+    limits = limits_with(clock)
+    limits.acquire(URL)
+    limits.slow_down(URL, error)
+    limits.release(URL, grow=False)
+
+    assert limit(limits, SERVER) == 2
+
+
+def test_fixed_jobs_neither_grow_nor_halve_nor_pass_the_cap(clock: Clock) -> None:
+    limits = limits_with(clock, jobs=4)
+    for url in (URL, WAYBACK_2022):
+        limits.acquire(url)
+        limits.release(url, grow=True)
+        limits.slow_down(url, status_error(503))
+
+    assert limits.state() == [(SERVER, 4, 4), (WAYBACK, 3, 3)]
+
+
+@pytest.mark.parametrize(("asked", "paused"), [("30", 30.0), ("600", MAX_WAIT)])
+def test_retry_after_holds_back_the_whole_host(clock: Clock, asked: str, paused: float) -> None:
+    limits = limits_with(clock)
+    limits.slow_down(URL, status_error(429, {"Retry-After": asked}))
+
+    limits.wait_for_host(WAYBACK_2022)
+    assert clock.pauses == []
+    # Another file of the same host waits, once
+    limits.wait_for_host(LIVE_2022)
+    limits.wait_for_host(URL)
+    assert clock.pauses == [paused]
+
+
+@pytest.mark.parametrize(
+    ("first", "pauses"),
+    [
+        (httpx.Response(429, headers={"Retry-After": "5"}), [5.0]),
+        (httpx.Response(503), [1.0]),
+        (httpx.ReadTimeout("timed out"), [1.0]),
+    ],
+    ids=["429-retry-after", "503", "timeout"],
+)
+def test_busy_server_lowers_the_limit_of_its_host(
+    tmp_path: Path,
+    link: DownloadLink,
+    clock: Clock,
+    waits: list[float],
+    first: httpx.Response | Exception,
+    pauses: list[float],
+) -> None:
+    limits = limits_with(clock)
+
+    with once(first).client() as client:
+        result = download(link, tmp_path, client, limits=limits)
+
+    assert result.path.read_bytes() == ZIP
+    assert limit(limits, SERVER) == 1
+    # The pause before the retry, which `limits` can end early
+    assert clock.pauses == pauses
+    assert waits == []
+
+
+def test_hosts_download_side_by_side_within_their_limits(tmp_path: Path, clock: Clock) -> None:
+    links = [server_link(n) for n in range(3)] + [wayback_link(n) for n in range(3)]
+    lock = threading.Lock()
+    running: Counter[str] = Counter()
+    most: Counter[str] = Counter()
+    arrived = [0]
+    # The first two files of each host wait for each other, so they must run at the same time.
+    together = threading.Barrier(4, timeout=5)
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        with lock:
+            running[host] += 1
+            most[host] = max(most[host], running[host])
+            arrived[0] += 1
+            first = arrived[0] <= 4
+        if first:
+            together.wait()
+        with lock:
+            running[host] -= 1
+        return httpx.Response(200, content=ZIP)
+
+    ended: Ended = []
+    with Server(respond).client() as client:
+        download_all(links, tmp_path, client, limits_with(clock, jobs=2), done=collect(ended))
+
+    assert most == {SERVER: 2, WAYBACK: 2}
+    assert sorted(link.url for link, _ in ended) == sorted(link.url for link in links)
+    assert all(isinstance(result, ArchivedFile) and result.downloaded for _, result in ended)
+
+
+def test_failing_file_does_not_stop_the_others(tmp_path: Path, clock: Clock) -> None:
+    links = [server_link(n) for n in range(3)] + [wayback_link(n) for n in range(2)]
+    failing = links[1].url
+    server = Server(
+        lambda request: httpx.Response(404 if str(request.url) == failing else 200, content=ZIP)
+    )
+
+    ended: Ended = []
+    with server.client() as client:
+        download_all(links, tmp_path, client, limits_with(clock), done=collect(ended))
+
+    results = {link.url: result for link, result in ended}
+    assert isinstance(results.pop(failing), httpx.HTTPStatusError)
+    assert len(results) == 4
+    assert all(isinstance(result, ArchivedFile) for result in results.values())
+    assert len(leftovers(tmp_path)) == 2 * 4
+
+
+def test_wayback_copy_needs_room_in_the_wayback_machine(tmp_path: Path, clock: Clock) -> None:
+    limits = limits_with(clock)
+
+    ended: Ended = []
+    with live_gone().client() as client:
+        download_all([with_copy()], tmp_path, client, limits, done=collect(ended))
+
+    ((_, result),) = ended
+    assert isinstance(result, ArchivedFile)
+    assert result.meta["source_url"] == WAYBACK_2022
+    # Its own room there, given back after a downloaded file
+    assert limit(limits, WAYBACK) == 3
+
+
+@pytest.mark.parametrize("interrupt", ["ctrl-c", "error"])
+@pytest.mark.usefixtures("small_chunks")
+def test_interrupt_stops_all_downloads_and_cleans_up(
+    tmp_path: Path, clock: Clock, interrupt: str
+) -> None:
+    """Ctrl+C while two files are halfway: as with a single download, only the one that can go
+    on keeps its `.part`; the file still in the queue never starts."""
+    resumable, other, queued = server_link(1), server_link(2), server_link(3)
+    quick = wayback_link(0)
+    halfway = {resumable.url: threading.Event(), other.url: threading.Event()}
+    rest_of_it = threading.Event()
+
+    class Held(httpx.SyncByteStream):
+        def __init__(self, url: str) -> None:
+            self.url = url
+
+        def __iter__(self) -> Iterator[bytes]:
+            yield ZIP[:20]
+            halfway[self.url].set()
+            rest_of_it.wait(timeout=5)
+            yield ZIP[20:]
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if url not in halfway:
+            return httpx.Response(200, content=ZIP)
+        headers = {"Content-Length": str(len(ZIP))}
+        if url == resumable.url:
+            headers["ETag"] = ETAG
+        return httpx.Response(200, stream=Held(url), headers=headers)
+
+    class Limits(HostLimits):
+        def stop(self) -> None:
+            super().stop()
+            rest_of_it.set()  # data keep coming after Ctrl+C
+
+    ended: list[DownloadLink] = []
+
+    def done(link: DownloadLink, result: ArchivedFile | Exception) -> bool:
+        ended.append(link)
+        assert all(event.wait(timeout=5) for event in halfway.values())
+        if interrupt == "error":
+            raise KeyboardInterrupt
+        _thread.interrupt_main()
+        return True
+
+    threads = threading.active_count()
+    server = Server(respond)
+    links = [resumable, other, queued, quick]
+    limits = Limits(2, clock=clock, sleep=clock.sleep)
+    with server.client() as client, pytest.raises(KeyboardInterrupt):
+        download_all(links, tmp_path, client, limits, done=done)
+
+    assert threading.active_count() == threads
+    assert ended == [quick]
+    assert queued.url not in requested(server)
+    finished, held = archive_path(tmp_path, quick), archive_path(tmp_path, resumable)
+    assert {p for p in tmp_path.rglob("*") if p.is_file()} == {
+        finished,
+        meta_path(finished),
+        held.with_name(held.name + ".part"),
+        held.with_name(held.name + ".part.json"),
+    }

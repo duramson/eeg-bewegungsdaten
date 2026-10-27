@@ -19,10 +19,16 @@ copy is downloaded instead, into the same place. It must have the SHA-256 record
 A file from the server itself with other bytes than recorded is archived all the same, as the
 TSO may have replaced it, with a warning and the recorded SHA-256 as ``expected_sha256`` in its
 metadata.
+
+`download_all` downloads several files at a time, each with `download`. Each host has its own
+queue, threads and limit (`HostLimits`): it starts at two files at a time, grows by one after
+each downloaded file up to a cap, and halves on 429, 503 and timeouts. Ctrl+C stops all
+downloads; each cleans up as above.
 """
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
 import email.utils
 import hashlib
@@ -30,12 +36,15 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 import zipfile
-from collections.abc import Callable
+from collections import deque
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -62,6 +71,13 @@ MAX_WAIT = 60.0
 #: ETag or Last-Modified. A broken-off download of it goes on without If-Range.
 WAYBACK_CAPTURE = "wayback capture"
 _WAYBACK_CAPTURE = re.compile(r"^https://web\.archive\.org/web/\d+id_/")
+#: Files downloaded from one host at the same time, at most. The Wayback Machine asks for
+#: restraint. Other hosts get `START_JOBS`.
+MAX_JOBS = {"www.netztransparenz.de": 6, "web.archive.org": 3}
+#: Files per host at the start of a run
+START_JOBS = 2
+#: Answers that ask to slow down. They and timeouts halve the limit of the host.
+SLOW_DOWN = frozenset({429, 503})
 
 
 class DownloadError(RuntimeError):
@@ -123,6 +139,13 @@ def read_meta(path: Path) -> dict[str, Any] | None:
     return meta
 
 
+def is_archived(data_dir: Path, link: DownloadLink) -> bool:
+    try:
+        return read_meta(archive_path(data_dir, link)) is not None
+    except DownloadError:
+        return False
+
+
 def sha256_of(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as f:
@@ -137,9 +160,11 @@ def download(
     client: httpx.Client | None = None,
     *,
     progress: Progress | None = None,
+    limits: HostLimits | None = None,
 ) -> ArchivedFile:
     """Download `link` into the archive unless a finished copy is already there. `progress`
-    gets the bytes received and the `Content-Length`."""
+    gets the bytes received and the `Content-Length`. `limits` come from `download_all`, which
+    holds room on the host of `link.url` while this runs (see `_retrying`)."""
     path = archive_path(data_dir, link)
     meta = read_meta(path)
     if meta is not None:
@@ -152,7 +177,7 @@ def download(
 
     http = client or new_client()
     try:
-        meta = _fetch_or_fall_back(http, link, path, progress)
+        meta = _fetch_or_fall_back(http, link, path, progress, limits)
     finally:
         if client is None:
             http.close()
@@ -163,10 +188,16 @@ def download(
 
 
 def _fetch_or_fall_back(
-    http: httpx.Client, link: DownloadLink, path: Path, progress: Progress | None
+    http: httpx.Client,
+    link: DownloadLink,
+    path: Path,
+    progress: Progress | None,
+    limits: HostLimits | None,
 ) -> dict[str, Any]:
     try:
-        meta = _retrying(link.url, lambda: _fetch(http, link, path, link.url, progress=progress))
+        meta = _retrying(
+            link.url, lambda: _fetch(http, link, path, link.url, progress=progress), limits
+        )
     except httpx.HTTPStatusError as e:
         if e.response.status_code != 404 or link.fallback_url is None:
             raise
@@ -184,18 +215,33 @@ def _fetch_or_fall_back(
         return meta
     log.warning("%s answers 404, downloading the Wayback copy %s", link.url, link.fallback_url)
     fallback = link.fallback_url
-    return _retrying(
-        fallback,
-        lambda: _fetch(http, link, path, fallback, sha256=link.sha256, progress=progress),
-    )
+    # The copy needs room on its own host as well. Copies are all in the Wayback Machine, so no
+    # thread waits for netztransparenz.de while it holds room there.
+    room: contextlib.AbstractContextManager[None] = contextlib.nullcontext()
+    if limits is not None and _hostname(fallback) != _hostname(link.url):
+        room = limits.slot(fallback)
+    with room:
+        return _retrying(
+            fallback,
+            lambda: _fetch(http, link, path, fallback, sha256=link.sha256, progress=progress),
+            limits,
+        )
 
 
-def _retrying(url: str, fetch: Callable[[], dict[str, Any]]) -> dict[str, Any]:
-    """`fetch()`, tried again up to `ATTEMPTS` times in all on errors that may go away."""
+def _retrying(
+    url: str, fetch: Callable[[], dict[str, Any]], limits: HostLimits | None = None
+) -> dict[str, Any]:
+    """`fetch()`, tried again up to `ATTEMPTS` times in all on errors that may go away. With
+    `limits`, each attempt first waits out a `Retry-After` of the host, a busy host lowers its
+    limit, and `HostLimits.stop` ends the pauses."""
     for attempt in range(1, ATTEMPTS + 1):
+        if limits is not None:
+            limits.wait_for_host(url)
         try:
             return fetch()
         except (httpx.TransportError, httpx.HTTPStatusError) as e:
+            if limits is not None:
+                limits.slow_down(url, e)
             wait = _wait_before_retry(e, attempt)
             if wait is None or attempt == ATTEMPTS:
                 raise
@@ -212,7 +258,10 @@ def _retrying(url: str, fetch: Callable[[], dict[str, Any]]) -> dict[str, Any]:
                 attempt + 1,
                 ATTEMPTS,
             )
-            time.sleep(wait)
+            if limits is None:
+                time.sleep(wait)
+            else:
+                limits.sleep(wait)
     raise AssertionError("unreachable")
 
 
@@ -285,14 +334,16 @@ def _fetch(
                 total = (
                     start + int(expected) if expected is not None and expected.isdigit() else None
                 )
+                # Before the validator is noted: `download_all` may stop the download here, and a
+                # noted validator without the bytes of this answer would be kept for nothing.
+                if progress is not None:
+                    progress(start, total)
                 validator = None if encoded else _validator(headers, url)
                 if validator is None:
                     state.unlink(missing_ok=True)
                 else:
                     state.write_text(json.dumps({"url": url, "validator": validator}))
                 resumable = validator is not None
-                if progress is not None:
-                    progress(start, total)
                 with part.open("ab" if start else "wb") as f:
                     for chunk in response.iter_bytes(CHUNK_SIZE):
                         f.write(chunk)
@@ -436,6 +487,255 @@ def _check_zip(path: Path, url: str) -> None:
         raise DownloadError(f"{url}: not a ZIP file ({e})") from e
     if broken is not None:
         raise DownloadError(f"{url}: CRC error in {broken}")
+
+
+def _hostname(url: str) -> str:
+    return urlsplit(url).hostname or ""
+
+
+@dataclass
+class _Host:
+    limit: int
+    cap: int
+    running: int = 0
+    paused_until: float = 0.0
+
+
+class HostLimits:
+    """How many files `download_all` downloads from each host at the same time.
+
+    Without `jobs`, the limit of a host starts at `START_JOBS`, grows by one after each
+    downloaded file up to its cap in `MAX_JOBS`, and halves on 429, 503 and timeouts (AIMD).
+    Errors are the signal, as the speed varies too much from file to file. With `jobs`, the limit
+    stays at `jobs`, but never above the cap. A `Retry-After` holds back every new request to the
+    host until it has passed. After `stop()`, every wait ends with KeyboardInterrupt, as Ctrl+C
+    ends a single download. `clock` and `sleep` are for tests.
+    """
+
+    def __init__(
+        self,
+        jobs: int | None = None,
+        *,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], object] | None = None,
+    ) -> None:
+        self.jobs = jobs
+        self._clock = clock
+        self._stopped = threading.Event()
+        self._sleep = sleep or self._stopped.wait
+        self._changed = threading.Condition()
+        self._hosts: dict[str, _Host] = {}
+
+    def _host(self, url: str) -> _Host:
+        """The state of the host of `url`; only while `_changed` is held."""
+        name = _hostname(url)
+        if name not in self._hosts:
+            cap = MAX_JOBS.get(name, START_JOBS)
+            if self.jobs is None:
+                self._hosts[name] = _Host(min(START_JOBS, cap), cap)
+            else:
+                self._hosts[name] = _Host(min(self.jobs, cap), min(self.jobs, cap))
+        return self._hosts[name]
+
+    def cap(self, url: str) -> int:
+        with self._changed:
+            return self._host(url).cap
+
+    def state(self) -> list[tuple[str, int, int]]:
+        """Each host so far, with its current limit and its cap."""
+        with self._changed:
+            return [(name, host.limit, host.cap) for name, host in self._hosts.items()]
+
+    def acquire(self, url: str) -> None:
+        """Wait until the host of `url` has room for one more file."""
+        with self._changed:
+            host = self._host(url)
+            while host.running >= host.limit and not self.stopped:
+                self._changed.wait()
+            self.check()
+            host.running += 1
+
+    def release(self, url: str, *, grow: bool) -> None:
+        """Give the room back; `grow` after a downloaded file."""
+        with self._changed:
+            host = self._host(url)
+            host.running -= 1
+            if grow and self.jobs is None:
+                host.limit = min(host.limit + 1, host.cap)
+            self._changed.notify_all()
+
+    @contextlib.contextmanager
+    def slot(self, url: str) -> Iterator[None]:
+        """Room on the host of `url` while the body runs; the limit grows if it succeeds."""
+        self.acquire(url)
+        ok = False
+        try:
+            yield
+            ok = True
+        finally:
+            self.release(url, grow=ok)
+
+    def slow_down(self, url: str, error: httpx.HTTPError) -> None:
+        """Halve the limit of the host of `url` (at least 1) on 429, 503 or a timeout, and hold
+        back its requests for what `Retry-After` asks for, up to `MAX_WAIT`."""
+        status = error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None
+        if status not in SLOW_DOWN and not isinstance(error, httpx.TimeoutException):
+            return
+        with self._changed:
+            host = self._host(url)
+            if self.jobs is None:
+                host.limit = max(host.limit // 2, 1)
+                log.debug("%s: %d files at a time from now on", _hostname(url), host.limit)
+            if isinstance(error, httpx.HTTPStatusError):
+                asked = _retry_after(error.response.headers.get("Retry-After"))
+                if asked is not None:
+                    until = self._clock() + min(asked, MAX_WAIT)
+                    host.paused_until = max(host.paused_until, until)
+
+    def wait_for_host(self, url: str) -> None:
+        """Wait until a `Retry-After` of the host of `url` has passed."""
+        while True:
+            with self._changed:
+                left = self._host(url).paused_until - self._clock()
+            if left <= 0:
+                return
+            self.sleep(left)
+
+    def sleep(self, seconds: float) -> None:
+        """Wait `seconds`, or less if the run stops."""
+        self._sleep(seconds)
+        self.check()
+
+    def stop(self) -> None:
+        """End all waits, and the running downloads at their next block of data."""
+        self._stopped.set()
+        with self._changed:
+            self._changed.notify_all()
+
+    @property
+    def stopped(self) -> bool:
+        return self._stopped.is_set()
+
+    def check(self) -> None:
+        if self.stopped:
+            raise KeyboardInterrupt
+
+
+Done = Callable[[DownloadLink, ArchivedFile | Exception], bool]
+
+
+def download_all(
+    links: Sequence[DownloadLink],
+    data_dir: Path,
+    client: httpx.Client,
+    limits: HostLimits | None,
+    *,
+    done: Done,
+    start: Callable[[DownloadLink], Progress | None] = lambda link: None,
+) -> None:
+    """Download `links`: several at a time with `limits`, one after the other without.
+
+    `start(link)` is called as a file starts and returns the callback for its progress.
+    `done(link, result)` gets the archived file or the error as each file ends, one file at a
+    time; if it returns False, no further file starts, but those running still end. Files
+    already in the archive come first, as they need no request.
+
+    Ctrl+C, or an error in `done`, stops all downloads and waits until each has cleaned up as a
+    single download does on Ctrl+C: it keeps a `.part` that can go on (see `_fetch`), deletes any
+    other and writes no metadata.
+    """
+    if limits is None:
+        for link in links:
+            if not done(link, _download_or_error(link, data_dir, client, start(link))):
+                return
+        return
+    queues: dict[str, deque[DownloadLink]] = {}
+    for link in links:
+        if is_archived(data_dir, link):
+            if not done(link, _download_or_error(link, data_dir, client, start(link))):
+                return
+        else:
+            queues.setdefault(_hostname(link.url), deque()).append(link)
+    _download_parallel(list(queues.values()), data_dir, client, limits, done, start)
+
+
+def _download_or_error(
+    link: DownloadLink,
+    data_dir: Path,
+    client: httpx.Client,
+    progress: Progress | None,
+    limits: HostLimits | None = None,
+) -> ArchivedFile | Exception:
+    try:
+        return download(link, data_dir, client, progress=progress, limits=limits)
+    except Exception as e:  # `done` decides what to make of it
+        return e
+
+
+def _download_parallel(
+    queues: list[deque[DownloadLink]],
+    data_dir: Path,
+    client: httpx.Client,
+    limits: HostLimits,
+    done: Done,
+    start: Callable[[DownloadLink], Progress | None],
+) -> None:
+    """Each host has its own queue and threads, so that a slow Wayback copy never holds up the
+    files from netztransparenz.de. A thread takes the next file only once its host has room."""
+    lock = threading.Lock()
+    errors: list[BaseException] = []
+
+    def progress(link: DownloadLink) -> Progress:
+        moves = start(link)
+
+        def moved(amount: int, total: int | None) -> None:
+            limits.check()  # after Ctrl+C, end the download at its next block of data
+            if moves is not None:
+                moves(amount, total)
+
+        return moved
+
+    def work(queue: deque[DownloadLink], url: str) -> None:
+        try:
+            while True:
+                limits.acquire(url)
+                downloaded = False
+                try:
+                    try:
+                        link = queue.popleft()
+                    except IndexError:
+                        return
+                    result = _download_or_error(link, data_dir, client, progress(link), limits)
+                    downloaded = isinstance(result, ArchivedFile) and result.downloaded
+                    with lock:
+                        if not done(link, result):
+                            for waiting in queues:
+                                waiting.clear()
+                finally:
+                    # Only after `done`, so that a file that ends the run frees no room for the next
+                    limits.release(url, grow=downloaded)
+        except BaseException as e:
+            if not limits.stopped:  # an error of its own, not the end of the run
+                errors.append(e)
+                limits.stop()
+
+    threads = [
+        threading.Thread(target=work, args=(queue, queue[0].url), daemon=True)
+        for queue in queues
+        for _ in range(min(limits.cap(queue[0].url), len(queue)))
+    ]
+    for thread in threads:
+        thread.start()
+    try:
+        for thread in threads:
+            while thread.is_alive():
+                thread.join(0.1)  # with a timeout, so that Ctrl+C gets through on Windows too
+    finally:
+        limits.stop()
+        for thread in threads:
+            thread.join()
+    if errors:
+        raise errors[0]
 
 
 def archived_files(data_dir: Path, *, include_incomplete: bool = False) -> list[ArchivedFile]:
