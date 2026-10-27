@@ -104,7 +104,8 @@ uv run eeg-bewegungsdaten verify
   that breaks off, also by Ctrl+C, goes on from where it stopped on the next attempt or run, where
   the server allows it (the Wayback Machine and netztransparenz.de's files of earlier years; the
   CDN of the current year sends the whole file again). Ctrl+C stops all running downloads within
-  5 seconds: none of them gets metadata, and only a `.part` that can go on stays. A full disk
+  5 seconds: none of them gets metadata, and only a `.part` that can go on stays. On Windows, a
+  `.part` that is still open after these 5 seconds stays too; the next run replaces it. A full disk
   stops the run: the files already running end, no further file starts. A file whose bytes
   differ from the SHA-256 the tool records for it is archived as it is now, with a warning and
   `expected_sha256` in its metadata, and `download` exits with 1: the TSO may have replaced it.
