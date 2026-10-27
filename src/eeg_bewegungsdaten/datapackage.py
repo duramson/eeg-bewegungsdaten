@@ -15,6 +15,7 @@ from typing import Any
 
 import polars as pl
 
+from eeg_bewegungsdaten._version import tool_text
 from eeg_bewegungsdaten.columns import describe_export
 from eeg_bewegungsdaten.links import UENB_NAMES
 
@@ -88,14 +89,6 @@ def datapackage(
         "resources": [_resource(content, schema, year, contributor) for year in years],
         "metaMetadata": {"metadataVersion": METADATA_VERSION, "metadataLicense": CC0},
     }
-
-
-def tool_text(content: dict[str, Any]) -> str:
-    """The version of the tool in `content`, with the commit for a run from a checkout."""
-    if not content.get("tool_commit"):
-        return str(content["tool_version"])
-    changes = ", with local changes" if content["tool_dirty"] else ""
-    return f"{content['tool_version']} (commit {content['tool_commit']}{changes})"
 
 
 def _resource(

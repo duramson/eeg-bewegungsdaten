@@ -14,6 +14,7 @@ from typing import Any
 
 import polars as pl
 
+from eeg_bewegungsdaten._version import tool_text
 from eeg_bewegungsdaten.columns import Column, describe_export
 from eeg_bewegungsdaten.datapackage import (
     DATAPACKAGE_JSON,
@@ -22,7 +23,6 @@ from eeg_bewegungsdaten.datapackage import (
     PRIMARY_KEY,
     REPOSITORY,
     datapackage,
-    tool_text,
 )
 from eeg_bewegungsdaten.links import UENB_NAMES
 from eeg_bewegungsdaten.mastr import HITS, MASTR_SCHEMA
