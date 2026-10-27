@@ -90,6 +90,14 @@ def datapackage(
     }
 
 
+def tool_text(content: dict[str, Any]) -> str:
+    """The version of the tool in `content`, with the commit for a run from a checkout."""
+    if not content.get("tool_commit"):
+        return str(content["tool_version"])
+    changes = ", with local changes" if content["tool_dirty"] else ""
+    return f"{content['tool_version']} (commit {content['tool_commit']}{changes})"
+
+
 def _resource(
     content: dict[str, Any], schema: pl.Schema, year: int, contributor: Contributor | None
 ) -> dict[str, Any]:
@@ -103,7 +111,7 @@ def _resource(
         "path": summary["file"],
         "description": (
             f"{summary['rows']:,} rows of {', '.join(uenbs)}; annual values, monthly ones from "
-            f"2021. Written by eeg-bewegungsdaten {content['tool_version']} on {created}."
+            f"2021. Written by eeg-bewegungsdaten {tool_text(content)} on {created}."
         ),
         "languages": ["en-GB"],
         "keywords": ["EEG", "renewable energy", "payments", "Marktstammdatenregister", "Germany"],

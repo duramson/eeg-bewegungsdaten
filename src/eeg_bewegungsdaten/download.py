@@ -39,7 +39,7 @@ from typing import Any
 
 import httpx
 
-from eeg_bewegungsdaten._version import __version__
+from eeg_bewegungsdaten._version import tool_info
 from eeg_bewegungsdaten.http import new_client
 from eeg_bewegungsdaten.links import PAGE_URL, DownloadLink
 from eeg_bewegungsdaten.paths import raw_dir, utc_now, write_json
@@ -344,7 +344,7 @@ def _fetch(
         # The Wayback Machine keeps the headers of the original server under this prefix.
         "orig_last_modified": headers.get("X-Archive-Orig-Last-Modified"),
         "etag": headers.get("ETag"),
-        "tool_version": __version__,
+        **tool_info(),
     }
 
 

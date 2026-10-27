@@ -11,9 +11,10 @@ import polars as pl
 import pytest
 from oemetadata.v2.v20.schema import OEMETADATA_V20_SCHEMA
 
-from eeg_bewegungsdaten import cli
+from eeg_bewegungsdaten import _version, cli
+from eeg_bewegungsdaten._version import __version__
 from eeg_bewegungsdaten.columns import COLUMNS, describe_export
-from eeg_bewegungsdaten.datacard import DATACARD, datacard
+from eeg_bewegungsdaten.datacard import DATACARD, WRITTEN_BY, datacard
 from eeg_bewegungsdaten.datapackage import DATAPACKAGE_JSON
 from eeg_bewegungsdaten.export import (
     ANLAGE_ID_SCHEMA,
@@ -36,7 +37,7 @@ from eeg_bewegungsdaten.mastr import (
 )
 from eeg_bewegungsdaten.paths import anlage_id_path, default_data_dir, output_paths
 from eeg_bewegungsdaten.schema import CLEAN_SCHEMA
-from tests.builders import HEADER, archive, csv, make_mastr_db, plants, row
+from tests.builders import COMMIT, HEADER, archive, csv, fake_git, make_mastr_db, plants, row
 
 ROOT = Path(__file__).parents[1]
 KEY_A = "E91000000000000000000000000000001"
@@ -472,6 +473,42 @@ def test_sources_name_every_mastr_export_date(data_dir: Path) -> None:
 
     assert content["mastr_export_dates"] == ["2026-10-17", "2026-10-18"]
     assert "Gesamtdatenexporte vom 17.10.2026 und 18.10.2026," in content["source_notes"]["mastr"]
+
+
+def test_outputs_of_an_installed_package_name_the_version_only(data_dir: Path) -> None:
+    content = export(data_dir)
+
+    assert (content["tool_commit"], content["tool_dirty"]) == (None, None)
+    text = (data_dir / "export" / "sources.txt").read_text(encoding="utf-8")
+    created = content["created_at"][:10]
+    assert f"\nErstellt am {created} mit eeg-bewegungsdaten {__version__}\n" in text
+    assert f"\n{WRITTEN_BY} {__version__} on {created}.\n" in read_datacard(data_dir)
+
+
+def test_outputs_of_a_checkout_name_its_commit(
+    tmp_path: Path, db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(_version, "_git", fake_git(status=" M README.md\n"))
+    data_dir = tmp_path / "data"
+    add_files(data_dir, db, {(2025, "amprion"): FILES[(2025, "amprion")]})
+
+    content = export(data_dir)
+
+    tool = {"tool_version": __version__, "tool_commit": COMMIT, "tool_dirty": True}
+    paths = output_paths(data_dir, 2025, "amprion")
+    (meta,) = (data_dir / "raw").rglob("*.meta.json")
+    for path in (meta, paths.report, paths.mastr_report, data_dir / "export" / "sources.json"):
+        written = json.loads(path.read_text(encoding="utf-8"))
+        assert {key: written[key] for key in tool} == tool, path
+    text = (data_dir / "export" / "sources.txt").read_text(encoding="utf-8")
+    created = content["created_at"][:10]
+    built = f"{__version__} (Commit {COMMIT}, mit lokalen Änderungen)"
+    assert f"\nErstellt am {created} mit eeg-bewegungsdaten {built}\n" in text
+    built = f"{__version__} (commit {COMMIT}, with local changes)"
+    assert f"\n{WRITTEN_BY} {built} on {created}.\n" in read_datacard(data_dir)
+    package = read_datapackage(data_dir)
+    jsonschema.validate(package, OEMETADATA_V20_SCHEMA)
+    assert f"Written by eeg-bewegungsdaten {built} on" in package["resources"][0]["description"]
 
 
 def test_export_warns_about_years_without_all_tsos(

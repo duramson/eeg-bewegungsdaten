@@ -36,7 +36,7 @@ from typing import Any
 
 import polars as pl
 
-from eeg_bewegungsdaten._version import __version__
+from eeg_bewegungsdaten._version import tool_info
 from eeg_bewegungsdaten.datacard import DATACARD, datacard, enumerate_words, is_datacard
 from eeg_bewegungsdaten.datapackage import DATAPACKAGE_JSON, Contributor, datapackage
 from eeg_bewegungsdaten.links import PAGE_URL, UENB, UENB_NAMES
@@ -214,7 +214,7 @@ def export(
 
     content = {
         "created_at": utc_now(),
-        "tool_version": __version__,
+        **tool_info(),
         "years": years_written,
         **_sources(data_dir, files),
     }
@@ -355,6 +355,9 @@ def _sources(data_dir: Path, files: Sequence[tuple[int, str]]) -> dict[str, Any]
 def _sources_text(content: dict[str, Any]) -> str:
     notes = content["source_notes"]
     created, version = content["created_at"][:10], content["tool_version"]
+    if content["tool_commit"]:
+        changes = ", mit lokalen Änderungen" if content["tool_dirty"] else ""
+        version += f" (Commit {content['tool_commit']}{changes})"
     lines = [
         "EEG-Bewegungsdaten, bereinigt und mit dem Marktstammdatenregister verknüpft",
         f"Erstellt am {created} mit eeg-bewegungsdaten {version}",

@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import httpx
 import pytest
+
+from eeg_bewegungsdaten import _version
 
 OPT_IN = {
     "live": ("--live", "calls netztransparenz.de"),
@@ -41,3 +45,13 @@ def _block_network(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPat
         raise RuntimeError(f"Network access in offline test: {request.url}")
 
     monkeypatch.setattr(httpx.HTTPTransport, "handle_request", refuse)
+
+
+@pytest.fixture(autouse=True)
+def _no_git(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Write outputs as an installed package does, whatever the state of the checkout the tests
+    run from. Tests of a checkout replace `_version._git`."""
+    monkeypatch.setattr(_version, "_git", lambda cwd, *args: None)
+    _version._checkout.cache_clear()
+    yield
+    _version._checkout.cache_clear()

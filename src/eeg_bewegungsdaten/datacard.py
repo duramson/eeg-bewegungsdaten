@@ -22,6 +22,7 @@ from eeg_bewegungsdaten.datapackage import (
     PRIMARY_KEY,
     REPOSITORY,
     datapackage,
+    tool_text,
 )
 from eeg_bewegungsdaten.links import UENB_NAMES
 from eeg_bewegungsdaten.mastr import HITS, MASTR_SCHEMA
@@ -52,7 +53,7 @@ def datacard(content: dict[str, Any], schema: pl.Schema) -> str:
         "",
         package["description"],
         "",
-        f"{WRITTEN_BY} {content['tool_version']} on {content['created_at'][:10]}.",
+        f"{WRITTEN_BY} {tool_text(content)} on {content['created_at'][:10]}.",
         "",
         "## Files",
         "",
