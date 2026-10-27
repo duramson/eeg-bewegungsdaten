@@ -4,6 +4,7 @@ import dataclasses
 import errno
 import functools
 import io
+import threading
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -21,7 +22,7 @@ from eeg_bewegungsdaten.links import (
     older_links,
     parse_links,
 )
-from tests.builders import PAGE, zip_bytes
+from tests.builders import PAGE, Clock, zip_bytes
 
 # The older files that `find_links` adds to the page
 OLDER = older_links(parse_links(PAGE))
@@ -65,7 +66,9 @@ def serve_page(
     monkeypatch.setattr("eeg_bewegungsdaten.links.new_client", new_client)
     # Retries of the failing files do not wait, with --jobs 1 or without
     monkeypatch.setattr("eeg_bewegungsdaten.download.time.sleep", lambda seconds: None)
-    monkeypatch.setattr(cli, "HostLimits", functools.partial(HostLimits, sleep=lambda s: None))
+    clock = Clock()
+    limits = functools.partial(HostLimits, clock=clock, sleep=clock.sleep)
+    monkeypatch.setattr(cli, "HostLimits", limits)
     return seen
 
 
@@ -269,7 +272,14 @@ def test_download_stops_when_the_disk_is_full(
     started: int,
 ) -> None:
     requests = serve_page(monkeypatch)
-    refuse_rename(monkeypatch, OSError(errno.ENOSPC, "No space left on device"), "")
+    # The files that start at once all reach the disk before the first of them fails
+    together = threading.Barrier(started, timeout=5)
+
+    def full(self: Path, target: Path) -> Path:
+        together.wait()
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(Path, "replace", full)
 
     assert cli.main(["--data-dir", str(tmp_path), "download", "--year", "2018", *jobs]) == 1
 

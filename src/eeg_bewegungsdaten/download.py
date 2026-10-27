@@ -78,6 +78,9 @@ MAX_JOBS = {"www.netztransparenz.de": 6, "web.archive.org": 3}
 START_JOBS = 2
 #: Answers that ask to slow down. They and timeouts halve the limit of the host.
 SLOW_DOWN = frozenset({429, 503})
+#: Seconds that Ctrl+C waits for the running downloads to stop. A download notices it at its
+#: next block of data, or when a server that sends nothing answers or times out.
+STOP_WAIT = 5.0
 
 
 class DownloadError(RuntimeError):
@@ -301,7 +304,7 @@ def _fetch(
     progress: Progress | None = None,
 ) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
-    part = path.with_name(path.name + ".part")
+    part = _part_path(path)
     state = _state_path(part)
     # Whether `part` holds the start of the file, so that the next attempt can go on from there
     # if this one breaks off: a broken connection, a busy server, Ctrl+C.
@@ -397,6 +400,11 @@ def _fetch(
         "etag": headers.get("ETag"),
         "tool_version": __version__,
     }
+
+
+def _part_path(path: Path) -> Path:
+    """Where the bytes of `path` arrive."""
+    return path.with_name(path.name + ".part")
 
 
 def _state_path(part: Path) -> Path:
@@ -510,6 +518,9 @@ class HostLimits:
     stays at `jobs`, but never above the cap. A `Retry-After` holds back every new request to the
     host until it has passed. After `stop()`, every wait ends with KeyboardInterrupt, as Ctrl+C
     ends a single download. `clock` and `sleep` are for tests.
+
+    While it holds its lock, it calls nothing else, not even the log: the display reads `state()`
+    while it holds its own lock, and the log may need that one.
     """
 
     def __init__(
@@ -556,11 +567,12 @@ class HostLimits:
             host.running += 1
 
     def release(self, url: str, *, grow: bool) -> None:
-        """Give the room back; `grow` after a downloaded file."""
+        """Give the room back; `grow` after a downloaded file. Files that still run beyond a
+        lowered limit do not raise it again as they end."""
         with self._changed:
             host = self._host(url)
             host.running -= 1
-            if grow and self.jobs is None:
+            if grow and self.jobs is None and host.running < host.limit:
                 host.limit = min(host.limit + 1, host.cap)
             self._changed.notify_all()
 
@@ -581,22 +593,27 @@ class HostLimits:
         status = error.response.status_code if isinstance(error, httpx.HTTPStatusError) else None
         if status not in SLOW_DOWN and not isinstance(error, httpx.TimeoutException):
             return
+        until = None
+        if isinstance(error, httpx.HTTPStatusError):
+            asked = _retry_after(error.response.headers.get("Retry-After"))
+            if asked is not None:
+                until = self._clock() + min(asked, MAX_WAIT)
         with self._changed:
             host = self._host(url)
             if self.jobs is None:
                 host.limit = max(host.limit // 2, 1)
-                log.debug("%s: %d files at a time from now on", _hostname(url), host.limit)
-            if isinstance(error, httpx.HTTPStatusError):
-                asked = _retry_after(error.response.headers.get("Retry-After"))
-                if asked is not None:
-                    until = self._clock() + min(asked, MAX_WAIT)
-                    host.paused_until = max(host.paused_until, until)
+            if until is not None:
+                host.paused_until = max(host.paused_until, until)
+            limit = host.limit
+        if self.jobs is None:
+            log.debug("%s: %d files at a time from now on", _hostname(url), limit)
 
     def wait_for_host(self, url: str) -> None:
         """Wait until a `Retry-After` of the host of `url` has passed."""
         while True:
             with self._changed:
-                left = self._host(url).paused_until - self._clock()
+                until = self._host(url).paused_until
+            left = until - self._clock()
             if left <= 0:
                 return
             self.sleep(left)
@@ -684,6 +701,7 @@ def _download_parallel(
     files from netztransparenz.de. A thread takes the next file only once its host has room."""
     lock = threading.Lock()
     errors: list[BaseException] = []
+    running: dict[threading.Thread, DownloadLink] = {}
 
     def progress(link: DownloadLink) -> Progress:
         moves = start(link)
@@ -705,7 +723,9 @@ def _download_parallel(
                         link = queue.popleft()
                     except IndexError:
                         return
+                    running[threading.current_thread()] = link
                     result = _download_or_error(link, data_dir, client, progress(link), limits)
+                    del running[threading.current_thread()]
                     downloaded = isinstance(result, ArchivedFile) and result.downloaded
                     with lock:
                         if not done(link, result):
@@ -720,22 +740,54 @@ def _download_parallel(
                 limits.stop()
 
     threads = [
-        threading.Thread(target=work, args=(queue, queue[0].url), daemon=True)
+        threading.Thread(
+            target=work,
+            args=(queue, queue[0].url),
+            name=f"download {_hostname(queue[0].url)}",
+            daemon=True,  # so that the run can end without those that do not stop in time
+        )
         for queue in queues
         for _ in range(min(limits.cap(queue[0].url), len(queue)))
     ]
-    for thread in threads:
-        thread.start()
     try:
         for thread in threads:
-            while thread.is_alive():
+            thread.start()
+        for thread in threads:
+            while thread.is_alive() and not limits.stopped:
                 thread.join(0.1)  # with a timeout, so that Ctrl+C gets through on Windows too
     finally:
-        limits.stop()
-        for thread in threads:
-            thread.join()
+        _stop(threads, running, limits, data_dir)
     if errors:
         raise errors[0]
+
+
+def _stop(
+    threads: list[threading.Thread],
+    running: dict[threading.Thread, DownloadLink],
+    limits: HostLimits,
+    data_dir: Path,
+) -> None:
+    """After Ctrl+C or an error, stop the downloads still running and wait up to `STOP_WAIT` for
+    them. One that has not stopped by then is left as `_fetch` would leave it: a `.part` that can
+    go on stays with its `.part.json`, any other `.part` is deleted."""
+    limits.stop()
+    if running:
+        n = len(running)
+        log.info("Stopping %d running download%s", n, "" if n == 1 else "s")
+    deadline = time.monotonic() + STOP_WAIT
+    for thread in threads:
+        if thread.is_alive():
+            thread.join(max(deadline - time.monotonic(), 0.0))
+    for thread, link in list(running.items()):
+        if not thread.is_alive():
+            continue
+        log.warning("%s did not stop within %.0f s", link.url, STOP_WAIT)
+        part = _part_path(archive_path(data_dir, link))
+        if not _state_path(part).exists():
+            try:
+                part.unlink(missing_ok=True)
+            except OSError as e:  # Windows deletes no file that is still open
+                log.warning("Cannot delete %s (%s); the next download of it does", part, e)
 
 
 def archived_files(data_dir: Path, *, include_incomplete: bool = False) -> list[ArchivedFile]:

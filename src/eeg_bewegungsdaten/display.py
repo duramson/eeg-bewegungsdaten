@@ -574,11 +574,13 @@ class DownloadDisplay(RunDisplay):
         if wayback:
             data += f"{s}{wayback} from the Wayback Machine"
         lines: list[tuple[str, Text | str]] = [("Data", data)]
-        if self.limits is not None and self.limits.state():
-            adapts = self.limits.jobs is None
+        # `HostLimits` takes no other lock while it holds its own, so this may run under ours.
+        state = self.limits.state() if self.limits is not None else []
+        if state:
+            adapts = self.limits is not None and self.limits.jobs is None
             hosts = [
                 f"{_host_name(host)} {limit} at a time" + (f" (up to {cap})" if adapts else "")
-                for host, limit, cap in self.limits.state()
+                for host, limit, cap in state
             ]
             lines.append(("Hosts", s.join(hosts)))
         return lines

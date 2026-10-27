@@ -5,7 +5,9 @@ import dataclasses
 import hashlib
 import json
 import logging
+import sys
 import threading
+import time
 from collections import Counter
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -30,7 +32,7 @@ from eeg_bewegungsdaten.download import (
     verify,
 )
 from eeg_bewegungsdaten.links import PAGE_URL, DownloadLink, find_links, older_links
-from tests.builders import PAGE, TENNET_PART, classified, zip_bytes
+from tests.builders import PAGE, TENNET_PART, Clock, classified, zip_bytes
 
 URL = (
     "https://www.netztransparenz.de/cdn/files/0687a707-cf7c-45c1-29cf-08defc51206b/"
@@ -276,6 +278,22 @@ def test_failed_check_after_going_on_leaves_nothing_behind(
 
     with server.client() as client, pytest.raises(DownloadError):
         download(link, tmp_path, client)
+
+    assert leftovers(tmp_path) == []
+
+
+def test_stop_before_the_first_byte_leaves_nothing_behind(
+    tmp_path: Path, link: DownloadLink
+) -> None:
+    """`download_all` stops a download in its progress callback. Before the first byte, there is
+    nothing to go on with, so the ETag must not have been noted yet."""
+
+    def stop(done: int, total: int | None) -> None:
+        raise KeyboardInterrupt
+
+    server = serve(ZIP, headers={"ETag": ETAG, "Content-Length": str(len(ZIP))})
+    with server.client() as client, pytest.raises(KeyboardInterrupt):
+        download(link, tmp_path, client, progress=stop)
 
     assert leftovers(tmp_path) == []
 
@@ -829,21 +847,6 @@ def wayback_link(n: int) -> DownloadLink:
     )
 
 
-class Clock:
-    """Time that passes only while someone sleeps; records the pauses."""
-
-    def __init__(self) -> None:
-        self.now = 0.0
-        self.pauses: list[float] = []
-
-    def __call__(self) -> float:
-        return self.now
-
-    def sleep(self, seconds: float) -> None:
-        self.pauses.append(seconds)
-        self.now += seconds
-
-
 @pytest.fixture
 def clock() -> Clock:
     return Clock()
@@ -888,6 +891,50 @@ def test_limit_grows_after_each_downloaded_file_up_to_the_cap(clock: Clock) -> N
         grown[host] = seen
 
     assert grown == {SERVER: [2, 3, 4, 5, 6, 6], WAYBACK: [2, 3, 3, 3, 3, 3]}
+
+
+def test_halved_limit_holds_while_the_files_beyond_it_end(clock: Clock) -> None:
+    limits = limits_with(clock)
+    for _ in range(4):
+        limits.acquire(URL)
+        limits.release(URL, grow=True)
+    for _ in range(6):
+        limits.acquire(URL)
+    limits.slow_down(URL, status_error(503))
+    seen = []
+    for _ in range(5):
+        limits.release(URL, grow=True)
+        seen.append(limit(limits, SERVER))
+
+    # Three of the six ran beyond the new limit of 3; only then does it grow again
+    assert seen == [3, 3, 3, 4, 5]
+
+
+def test_limits_log_without_holding_their_lock(clock: Clock) -> None:
+    """The display reads `state()` while it holds its lock, and on a terminal the log needs
+    that lock too: logging while holding the lock of `HostLimits` could deadlock."""
+    limits = limits_with(clock)
+    free: list[bool] = []
+
+    class Probe(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            reader = threading.Thread(target=limits.state, daemon=True)
+            reader.start()
+            reader.join(timeout=5)
+            free.append(not reader.is_alive())
+
+    logger = logging.getLogger("eeg_bewegungsdaten.download")
+    probe = Probe()
+    logger.addHandler(probe)
+    level = logger.level
+    logger.setLevel(logging.DEBUG)
+    try:
+        limits.slow_down(URL, status_error(503))
+    finally:
+        logger.removeHandler(probe)
+        logger.setLevel(level)
+
+    assert free == [True]
 
 
 @pytest.mark.parametrize(
@@ -1106,3 +1153,57 @@ def test_interrupt_stops_all_downloads_and_cleans_up(
         held.with_name(held.name + ".part"),
         held.with_name(held.name + ".part.json"),
     }
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Windows deletes no file that is still open")
+@pytest.mark.usefixtures("small_chunks")
+def test_download_that_does_not_stop_is_left_behind_in_time(
+    tmp_path: Path,
+    clock: Clock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A server that sends nothing more holds up Ctrl+C no longer than `STOP_WAIT`. The `.part`
+    of that file cannot go on, so it is deleted all the same."""
+    monkeypatch.setattr("eeg_bewegungsdaten.download.STOP_WAIT", 0.1)
+    stalled, quick = server_link(1), wayback_link(0)
+    halfway, silence_ends = threading.Event(), threading.Event()
+
+    class Stalled(httpx.SyncByteStream):
+        def __iter__(self) -> Iterator[bytes]:
+            yield ZIP[:20]
+            halfway.set()
+            silence_ends.wait(timeout=10)
+            yield ZIP[20:]
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == stalled.url:
+            return httpx.Response(200, stream=Stalled(), headers={"Content-Length": str(len(ZIP))})
+        return httpx.Response(200, content=ZIP)
+
+    def done(link: DownloadLink, result: ArchivedFile | Exception) -> bool:
+        assert halfway.wait(timeout=5)
+        _thread.interrupt_main()
+        return True
+
+    part = archive_path(tmp_path, stalled)
+    part = part.with_name(part.name + ".part")
+    caplog.set_level(logging.INFO, logger="eeg_bewegungsdaten.download")
+    began = time.monotonic()
+    try:
+        with Server(respond).client() as client, pytest.raises(KeyboardInterrupt):
+            download_all([stalled, quick], tmp_path, client, limits_with(clock), done=done)
+        took = time.monotonic() - began
+        left = part.exists()
+    finally:
+        silence_ends.set()
+        for thread in threading.enumerate():
+            if thread.name.startswith("download "):
+                thread.join(timeout=5)
+
+    assert took < 3
+    assert not left
+    assert "Stopping 1 running download" in caplog.messages
+    assert f"{stalled.url} did not stop within" in caplog.text
+    finished = archive_path(tmp_path, quick)
+    assert {p for p in tmp_path.rglob("*") if p.is_file()} == {finished, meta_path(finished)}
