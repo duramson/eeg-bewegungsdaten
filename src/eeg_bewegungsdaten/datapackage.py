@@ -26,6 +26,8 @@ CONTEXT = (
 METADATA_VERSION = "OEMetadata-2.0.4"
 DATAPACKAGE_JSON = "datapackage.json"
 REPOSITORY = "https://github.com/duramson/eeg-bewegungsdaten"
+# The pages of docs/ on GitHub, which the metadata and the datacard link to
+DOCS = f"{REPOSITORY}/blob/main/docs"
 MASTR_DOWNLOAD = "https://www.marktstammdatenregister.de/MaStR/Datendownload"
 # The row of the export: year, TSO and the line in the file as published.
 PRIMARY_KEY = ("jahr", "uenb", "quelldatei", "zeile")
@@ -40,9 +42,9 @@ DL_DE_BY_2_0 = {
 EEG_DATA = {
     "name": None,
     "title": "EEG-Bewegungsdaten: no settled license",
-    "path": f"{REPOSITORY}#data-license",
+    "path": f"{DOCS}/data-license.md",
     "instruction": "The TSOs publish the files under section 51 EnFG without a license. They hold "
-    "personal data. Read 'Data license' in the README of eeg-bewegungsdaten before you share "
+    "personal data. Read 'Data license' in the docs of eeg-bewegungsdaten before you share "
     "anything derived from them.",
 }
 CC0 = {

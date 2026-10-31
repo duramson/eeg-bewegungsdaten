@@ -3,7 +3,7 @@
 Scripts that use the output of `eeg-bewegungsdaten` and compare it with other sources. They
 are not part of the package. They need `ingest` and `mastr` for the years and the database
 of open-MaStR (see
-[Matching with the Marktstammdatenregister](../README.md#matching-with-the-marktstammdatenregister)).
+[Matching with the Marktstammdatenregister](../docs/mastr.md)).
 
 ## Full-load hours of PV
 
@@ -95,4 +95,4 @@ uv run python analysis/wind_full_load_hours.py 2016 2025 wind.parquet
   2016 to 2019. The full-load hours change by 3 h at most.
 - For districts with at least 20 MW, the values of consecutive years correlate with 0.77 to 0.92.
 - The script writes every district, also those with only a few turbines. Before you share the
-  values, hide the districts as [Personal data](../README.md#personal-data) advises.
+  values, hide the districts as [Personal data](../docs/data-license.md#personal-data) advises.

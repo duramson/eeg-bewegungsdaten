@@ -109,6 +109,7 @@ publication date. This also ends the warning about an unknown year.
 and add timestamp and SHA-256 to `OLDER_FILES`.
 - [ ] Check that the files of {year - 1} still download now that the page has moved on: \
 `uv run eeg-bewegungsdaten --data-dir <empty folder> download --year {year - 1}`
+- [ ] Add {year} to `docs/data-status.md` and mark {year - 1} as no longer on the page.
 """,
             year,
         ),
@@ -158,8 +159,9 @@ def new_upload(link: DownloadLink) -> Issue:
 {link.url}
 
 - [ ] Download and ingest it. Compare it with the upload before: rows, sums, categories (see \
-"Older years" in the README).
-- [ ] Add it to `OLDER_FILES` and keep the upload before.
+"Uploads published twice" in docs/data.md).
+- [ ] Add it to `OLDER_FILES` and keep the upload before. Note it in "Uploads published twice" \
+in `docs/data.md` and in `docs/data-status.md`.
 - [ ] Save it in the Wayback Machine and add the copy to `OLDER_FILES`.
 """,
         year,

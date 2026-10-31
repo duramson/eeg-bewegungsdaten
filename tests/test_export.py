@@ -15,13 +15,15 @@ from eeg_bewegungsdaten import _version, cli
 from eeg_bewegungsdaten._version import __version__
 from eeg_bewegungsdaten.columns import COLUMNS, describe_export
 from eeg_bewegungsdaten.datacard import DATACARD, WRITTEN_BY, datacard
-from eeg_bewegungsdaten.datapackage import DATAPACKAGE_JSON
+from eeg_bewegungsdaten.datapackage import DATAPACKAGE_JSON, DOCS, REPOSITORY
 from eeg_bewegungsdaten.export import (
     ANLAGE_ID_SCHEMA,
     DL_DE_BY,
     EXPORT_SCHEMA,
     ID_LIMIT,
     MASTR_COLUMNS,
+    SOURCES_JSON,
+    SOURCES_TXT,
     ExportError,
     _new_ids,
     export,
@@ -38,8 +40,8 @@ from eeg_bewegungsdaten.mastr import (
 from eeg_bewegungsdaten.paths import anlage_id_path, default_data_dir, output_paths
 from eeg_bewegungsdaten.schema import CLEAN_SCHEMA
 from tests.builders import COMMIT, HEADER, archive, csv, fake_git, make_mastr_db, plants, row
+from tests.markdown import ROOT, broken
 
-ROOT = Path(__file__).parents[1]
 KEY_A = "E91000000000000000000000000000001"
 KEY_B = "E91000000000000000000000000000002"
 KEY_C = "E91000000000000000000000000000003"
@@ -412,7 +414,7 @@ def test_datacard_claims_no_license_for_the_eeg_data(data_dir: Path) -> None:
     eeg, mastr = section(text, "Licenses").strip().splitlines()
     assert eeg.startswith(
         "- [EEG-Bewegungsdaten: no settled license]"
-        "(https://github.com/duramson/eeg-bewegungsdaten#data-license)."
+        "(https://github.com/duramson/eeg-bewegungsdaten/blob/main/docs/data-license.md)."
     )
     assert "Datenlizenz" not in eeg
     assert mastr.startswith(f"- [{DL_DE_BY}](https://www.govdata.de/dl-de/by-2-0) (DL-DE-BY-2.0)")
@@ -425,25 +427,19 @@ def test_datacard_claims_no_license_for_the_eeg_data(data_dir: Path) -> None:
     assert f"- {content['source_notes']['mastr']}\n" in notes
 
 
-def github_anchor(heading: str) -> str:
-    """The anchor that GitHub gives a heading."""
-    return re.sub(r"[^\w\- ]", "", heading.strip().lower()).replace(" ", "-")
+def test_metadata_link_only_to_pages_and_sections_that_exist(data_dir: Path) -> None:
+    export(data_dir)
 
-
-def test_readme_has_the_sections_the_metadata_link_to() -> None:
-    readme = (ROOT / "README.md").read_text(encoding="utf-8")
-    headings = {github_anchor(line.lstrip("#")) for line in readme.splitlines() if line[:1] == "#"}
-    linked = {
-        anchor
-        for module in ("datacard.py", "datapackage.py")
-        for anchor in re.findall(
-            r"\{REPOSITORY\}#([\w-]+)",
-            (ROOT / "src" / "eeg_bewegungsdaten" / module).read_text(encoding="utf-8"),
+    out = data_dir / "export"
+    found = {
+        url
+        for name in (DATACARD, DATAPACKAGE_JSON, SOURCES_TXT, SOURCES_JSON)
+        for url in re.findall(
+            rf"{re.escape(REPOSITORY)}[^\s)\"'>\]]*", (out / name).read_text(encoding="utf-8")
         )
     }
-    assert {"summing-energy", "data-license"} <= linked
-    # `readme` is where GitHub shows the README on the page of the repository.
-    assert sorted(linked - headings - {"readme"}) == []
+    assert {f"{DOCS}/output.md#summing-energy", f"{DOCS}/data-license.md"} <= found
+    assert {url: why for url in found if (why := broken(url, ROOT / "README.md"))} == {}
 
 
 def test_export_replaces_no_readme_it_did_not_write(data_dir: Path, tmp_path: Path) -> None:
