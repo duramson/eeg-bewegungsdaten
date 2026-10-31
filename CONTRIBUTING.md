@@ -1,6 +1,6 @@
 # Contributing
 
-Set up the project as described in [Development](README.md#development) in the README. Bugs and
+Set up the project as described in [Development](docs/development.md). Bugs and
 ideas go into the [issue forms](https://github.com/duramson/eeg-bewegungsdaten/issues/new/choose).
 
 ## Before a pull request
@@ -34,7 +34,7 @@ ideas go into the [issue forms](https://github.com/duramson/eeg-bewegungsdaten/i
 - Changes the topic does not need: reformatting, renamings, updated dependencies.
 - MaStR data that change over time, such as capacity, location, operator or status, in `mastr`
   or the export. They show the day of the MaStR export, not the payment year; see
-  [Matching with the Marktstammdatenregister](README.md#matching-with-the-marktstammdatenregister).
+  [Matching with the Marktstammdatenregister](docs/mastr.md).
   Analyses that need them join them in `analysis/`.
 
 ## AI tools
@@ -77,4 +77,4 @@ Maintainers set the labels; you can suggest one in the description. Besides the 
   tool may still need a workaround.
 - `on hold`: waits for a decision, for example on scope or license; no work on it until then.
 - `data <year>`: the issues of the yearly upkeep, opened by the workflow `data-issues.yml` (see
-  [Development](README.md#development)).
+  [Development](docs/development.md)).

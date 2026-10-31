@@ -1,8 +1,9 @@
 # Findings
 
 What the files of 2016 to 2025 hold, and how well `eeg-bewegungsdaten` reads them and
-matches them with the MaStR. The [README](../README.md) describes the tool and its output.
-`uv run pytest --realdata` checks the line counts and the sums against the annual account.
+matches them with the MaStR. The [README](../README.md) and the other pages in `docs/` describe
+the tool and its output. `uv run pytest --realdata` checks the line counts and the sums against
+the annual account.
 
 ## Reading the files
 
@@ -101,7 +102,7 @@ rows. Where it is larger, the excess adds up to at most 0.06 TWh per TSO and yea
 ### Special rows
 
 What the kinds of rows in `sonderzeile` hold (see
-[Summing energy](../README.md#summing-energy)):
+[Summing energy](output.md#summing-energy)):
 
 - **Repeated energy:** The `FLP` rows probably carry the flexibility premium. Their `strommenge`
   repeats energy that the other rows of the same plant already contain. In 2025 these are 3,256
@@ -155,7 +156,7 @@ other direct marketing.
 
 ### The bridge
 
-How the bridge works is in [The bridge](../README.md#the-bridge) in the README. It matches 0.31
+How the bridge works is in [The bridge](mastr.md#the-bridge). It matches 0.31
 to 0.41 million rows per year in 2016 to 2019 (1.41 to 1.51 billion euros, 5.4 to 5.8 % of the
 payments), and 8,235 to 87,926 rows per year in 2020 to 2025 (0.01 to 0.44 billion euros).
 
@@ -181,7 +182,7 @@ Checks of the bridge:
 - The bridge carries an error of the rows from 2020 on back to earlier years:
   some grid operators give the EEG number of one plant in the rows of a neighbouring plant whose
   Anlagenschluessel is not in the MaStR (see step 1 of
-  [How rows are matched](../README.md#how-rows-are-matched)). In 2019, 2,476 PV plants get rows of
+  [How rows are matched](mastr.md#how-rows-are-matched)). In 2019, 2,476 PV plants get rows of
   several Anlagenschluessel through the bridge, and 575 of them reach more than 1,500 full-load
   hours. In 2020, matching by number gives 2,533 such PV plants, 1,293 of them above 1,500 h.
   Leaving out every Anlagenschluessel whose EEG number has other Anlagenschluessel too would

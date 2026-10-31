@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Published analyses show only aggregates, and none with fewer than 10 plants. See
-        [Personal data](https://github.com/duramson/eeg-bewegungsdaten#personal-data).
+        [Personal data](https://github.com/duramson/eeg-bewegungsdaten/blob/main/docs/data-license.md#personal-data).
   - type: textarea
     id: idea
     attributes:

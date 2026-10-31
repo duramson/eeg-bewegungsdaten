@@ -19,6 +19,7 @@ from eeg_bewegungsdaten.columns import Column, describe_export
 from eeg_bewegungsdaten.datapackage import (
     DATAPACKAGE_JSON,
     DL_DE_BY_2_0,
+    DOCS,
     EEG_DATA,
     PRIMARY_KEY,
     REPOSITORY,
@@ -32,10 +33,10 @@ from eeg_bewegungsdaten.special_rows import NOT_FED_IN, NOT_GENERATED
 DATACARD = "README.md"
 # The line by which `export` knows a card it wrote, so that it never replaces another README.md
 WRITTEN_BY = f"Written by [eeg-bewegungsdaten]({REPOSITORY})"
-# Sections of the README of eeg-bewegungsdaten that the card links to
-SUMMING_ENERGY = f"{REPOSITORY}#summing-energy"
-ADD_MASTR_DATA = f"{REPOSITORY}#add-mastr-data"
-PERSONAL_DATA = f"{REPOSITORY}#personal-data"
+# Sections of the docs of eeg-bewegungsdaten that the card links to
+SUMMING_ENERGY = f"{DOCS}/output.md#summing-energy"
+ADD_MASTR_DATA = f"{DOCS}/mastr.md#add-mastr-data"
+PERSONAL_DATA = f"{DOCS}/data-license.md#personal-data"
 
 
 def datacard(content: dict[str, Any], schema: pl.Schema) -> str:
@@ -78,7 +79,7 @@ def datacard(content: dict[str, Any], schema: pl.Schema) -> str:
         f"`sonderzeile` is {_codes(NOT_GENERATED)}.",
         "",
         "The rules that set `sonderzeile` hold for 2016 to 2025. See "
-        f"[Summing energy]({SUMMING_ENERGY}) in the README of eeg-bewegungsdaten.",
+        f"[Summing energy]({SUMMING_ENERGY}) in the docs of eeg-bewegungsdaten.",
         "",
         "### MaStR data",
         "",
@@ -113,7 +114,7 @@ def datacard(content: dict[str, Any], schema: pl.Schema) -> str:
         "- Hide every aggregate with fewer than 10 plants, and every aggregate in which one plant "
         "makes up almost the whole sum.",
         "",
-        f"See [Personal data]({PERSONAL_DATA}) in the README of eeg-bewegungsdaten.",
+        f"See [Personal data]({PERSONAL_DATA}) in the docs of eeg-bewegungsdaten.",
         "",
         "## Columns",
         "",
