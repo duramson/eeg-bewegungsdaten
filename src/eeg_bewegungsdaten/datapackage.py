@@ -15,6 +15,7 @@ from typing import Any
 
 import polars as pl
 
+from eeg_bewegungsdaten._version import tool_text
 from eeg_bewegungsdaten.columns import describe_export
 from eeg_bewegungsdaten.links import UENB_NAMES
 
@@ -103,7 +104,7 @@ def _resource(
         "path": summary["file"],
         "description": (
             f"{summary['rows']:,} rows of {', '.join(uenbs)}; annual values, monthly ones from "
-            f"2021. Written by eeg-bewegungsdaten {content['tool_version']} on {created}."
+            f"2021. Written by eeg-bewegungsdaten {tool_text(content)} on {created}."
         ),
         "languages": ["en-GB"],
         "keywords": ["EEG", "renewable energy", "payments", "Marktstammdatenregister", "Germany"],

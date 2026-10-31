@@ -11,13 +11,14 @@ import datetime as dt
 import io
 import sqlite3
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import closing
 from pathlib import Path
 
 import httpx
 import polars as pl
 
+from eeg_bewegungsdaten._version import CHECKOUT_PATH
 from eeg_bewegungsdaten.download import ArchivedFile, download
 from eeg_bewegungsdaten.links import DownloadLink, classify
 from eeg_bewegungsdaten.quality import check
@@ -49,6 +50,7 @@ UENB_NR = {
 NB = "SNB900000000001"
 KEY = "E90000000000000000000000000000001"
 FILE_ID = "0687a707-cf7c-45c1-29cf-08defc51206b"
+COMMIT = "9" * 40
 # TenneT 2024 came in parts without a CDN id; the folder on the server holds the year.
 TENNET_PART = (
     "https://www.netztransparenz.de/xspproxy/api/staticfiles/ntp-relaunch/dokumente/"
@@ -181,3 +183,13 @@ def make_mastr_db(
             placeholders = ", ".join("?" * len(columns))
             con.executemany(f'INSERT INTO "{table}" VALUES ({placeholders})', rows)
     return path
+
+
+def fake_git(prefix: str = CHECKOUT_PATH, status: str | None = "") -> Callable[..., str | None]:
+    """A stand-in for `_version._git`: a checkout at `COMMIT` with the package at `prefix`.
+    `status` is the output of git status, None if it fails."""
+
+    def git(cwd: Path, *args: str) -> str | None:
+        return f"{prefix}\n{COMMIT}\n" if "rev-parse" in args else status
+
+    return git

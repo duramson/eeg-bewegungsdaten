@@ -24,7 +24,7 @@ from typing import Any, Literal
 
 import polars as pl
 
-from eeg_bewegungsdaten._version import __version__
+from eeg_bewegungsdaten._version import tool_info
 from eeg_bewegungsdaten.download import ArchivedFile, archived_files
 from eeg_bewegungsdaten.paths import (
     check_finished,
@@ -249,7 +249,7 @@ def ingest(
                 "quarantine": str(outputs.quarantine),
             },
             "created_at": utc_now(),
-            "tool_version": __version__,
+            **tool_info(),
         }
         write_json(staged(outputs.report), report)
         write_pending(data_dir, outputs.pending, replaced)

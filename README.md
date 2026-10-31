@@ -184,6 +184,11 @@ Machine, `orig_last_modified` holds the `Last-Modified` date of the original ser
 holds the source files, line counts, all codes with counts, the sums of the number columns and,
 per CSV file, its header, its blank lines and its empty amounts.
 
+The `.meta.json` files, the reports and `sources.json` of the export record the version of the
+tool as `tool_version`. Before a release it is the same for every commit. So when the tool runs
+from a git checkout, they also record the commit as `tool_commit`, and as `tool_dirty` whether
+tracked files differed from it. For an installed package both are null.
+
 The Parquet files form three layers:
 
 - `text`: every line of every CSV file, split into the columns of the common schema. All
@@ -559,7 +564,8 @@ uv run eeg-bewegungsdaten export
 - It writes one file per year with the rows of all TSOs:
   `~/.eeg-bewegungsdaten/export/eeg-bewegungsdaten-<year>.parquet`.
 - `sources.txt` and `sources.json` hold the source notes for the EEG data and for the MaStR,
-  with the date of the MaStR export. They also list the source files with their SHA-256.
+  with the date of the MaStR export. They also list the source files with their SHA-256, and
+  name the version of the tool and, for a build from a git checkout, its commit.
 - `datapackage.json` describes the export in [OEMetadata v2](https://github.com/OpenEnergyPlatform/oemetadata),
   the metadata standard of the Open Energy Platform, which builds on the Frictionless Data
   Package: one resource per year with every column (type, unit, meaning, codes), its source

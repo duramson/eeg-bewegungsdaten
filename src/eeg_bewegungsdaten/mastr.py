@@ -51,7 +51,7 @@ from typing import Any
 
 import polars as pl
 
-from eeg_bewegungsdaten._version import __version__
+from eeg_bewegungsdaten._version import tool_info
 from eeg_bewegungsdaten.download import sha256_of
 from eeg_bewegungsdaten.paths import (
     check_finished,
@@ -602,7 +602,7 @@ def link_file(
         "bridge": None if bridge is None else bridge.source,
         "outputs": {"clean": str(paths.clean), "mastr": str(paths.mastr)},
         "created_at": utc_now(),
-        "tool_version": __version__,
+        **tool_info(),
     }
     write_atomic(paths.mastr, linked.select(MASTR_SCHEMA.names()).cast(MASTR_SCHEMA).write_parquet)
     write_json(paths.mastr_report, report)

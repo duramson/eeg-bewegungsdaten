@@ -14,6 +14,7 @@ from typing import Any
 
 import polars as pl
 
+from eeg_bewegungsdaten._version import tool_text
 from eeg_bewegungsdaten.columns import Column, describe_export
 from eeg_bewegungsdaten.datapackage import (
     DATAPACKAGE_JSON,
@@ -52,7 +53,7 @@ def datacard(content: dict[str, Any], schema: pl.Schema) -> str:
         "",
         package["description"],
         "",
-        f"{WRITTEN_BY} {content['tool_version']} on {content['created_at'][:10]}.",
+        f"{WRITTEN_BY} {tool_text(content)} on {content['created_at'][:10]}.",
         "",
         "## Files",
         "",
