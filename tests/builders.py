@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import io
 import sqlite3
+import threading
 import zipfile
 from collections.abc import Callable, Sequence
 from contextlib import closing
@@ -99,6 +100,23 @@ def classified(url: str, published: dt.date | None = None) -> DownloadLink:
     link = classify(url, published)
     assert link is not None, url
     return link
+
+
+class Clock:
+    """Time that passes only while someone sleeps, for `HostLimits`; records the pauses."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+        self.pauses: list[float] = []
+        self._lock = threading.Lock()
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        with self._lock:
+            self.pauses.append(seconds)
+            self.now += seconds
 
 
 def archive(

@@ -92,16 +92,27 @@ uv run eeg-bewegungsdaten verify
   If the page cannot be read, both go on with the files this version knows and exit with 1.
 - `download` archives every data file and the legends: about 170 MB for 2025, 1 GB for all
   years. Files already in the archive are skipped; if one file fails, the others still load.
+  It downloads several files at a time, with a limit per host. netztransparenz.de and the
+  Wayback Machine each have their own queue, so a slow Wayback copy never holds up the other
+  files. The limit starts at 2 files per host and grows by one after each downloaded file, up
+  to 6 for netztransparenz.de and 3 for the Wayback Machine. A 429, a 503 or a timeout halves
+  it (down to 1), and a `Retry-After` holds back all requests to that host. `--jobs N` fixes
+  the limit at N files per host, but not above these caps; `--jobs 1` downloads one file after
+  the other.
   A broken connection, a timeout or a busy server (429, 5xx) is tried up to four times per
   file, after 1, 2 and 4 seconds or what `Retry-After` asks for (at most a minute). A transfer
   that breaks off, also by Ctrl+C, goes on from where it stopped on the next attempt or run, where
   the server allows it (the Wayback Machine and netztransparenz.de's files of earlier years; the
-  CDN of the current year sends the whole file again). A full disk stops the run. A file whose bytes differ from the SHA-256 the tool records for it is archived
-  as it is now, with a warning and `expected_sha256` in its metadata, and `download` exits
-  with 1: the TSO may have replaced it.
-  On a terminal it shows the running file with its progress, the next files in the queue and a
-  summary that updates during the run; each finished file prints a line with size, time,
-  average speed, source and the start of its SHA-256. `-v` adds the full SHA-256 and path.
+  CDN of the current year sends the whole file again). Ctrl+C stops all running downloads within
+  5 seconds: none of them gets metadata, and only a `.part` that can go on stays. On Windows, a
+  `.part` that is still open after these 5 seconds stays too; the next run replaces it. A full disk
+  stops the run: the files already running end, no further file starts. A file whose bytes
+  differ from the SHA-256 the tool records for it is archived as it is now, with a warning and
+  `expected_sha256` in its metadata, and `download` exits with 1: the TSO may have replaced it.
+  On a terminal it shows the running files with their progress, the next files in the queue
+  and a summary that updates during the run, with the current limit per host; each finished
+  file prints a line with size, time, average speed, source and the start of its SHA-256. `-v`
+  adds the full SHA-256 and path.
   Without a terminal, only these lines and the summary are printed, on stderr.
 - `ingest` reads the newest upload per year and TSO and writes the Parquet files. It takes
   about 15 seconds for 2025 and about two minutes for all years on a current laptop, with
